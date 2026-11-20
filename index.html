@@ -782,6 +782,27 @@ function episodeInfo(e, show){
   const date = e.release_date ? new Date(e.release_date + 'T00:00:00').toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' }) : '';
   return { title:e.name, artist:(sh && sh.name) || '', album:date };
 }
+/* ---- Shuffle play ----
+   Playlists, albums & artists: start at a random song, then turn Spotify's shuffle on.
+   Plain song lists (Songs, Top Songs, search results…): shuffle the loaded songs ourselves. */
+async function shuffleContext(uri, total){
+  const body = { context_uri: uri };
+  if (total > 1) body.offset = { position: Math.floor(Math.random() * total) };
+  await playBody(body);
+  setTimeout(async () => {
+    try { await api('/me/player/shuffle?state=true' + devQ(), { method:'PUT' }); toast('Shuffle on'); }
+    catch {}
+    poll();
+  }, 600);
+}
+function shuffleListItem(){
+  return { label:'⇄ Shuffle Songs', onSelect:() => {
+    const m = top();
+    const uris = [...new Set((m.raw || []).map(t => t && t.uri).filter(Boolean))];
+    if (!uris.length) return toast('No songs to shuffle yet');
+    playBody({ uris: shuffled(uris).slice(0, 100) });
+  }};
+}
 function trackItem(t, idx, m, play){
   return { label:t.name, image: imgOf(t.album) || m.image, info: songInfo(t), onSelect:() => play(idx) };
 }
@@ -793,7 +814,10 @@ function playlistsMenu(){
 function playlistTracks(p){
   const m = paged(p.name, `/playlists/${p.id}/tracks?limit=50`, { split:true,
     fallback: `/playlists/${p.id}/items?limit=50`,
-    head: [{ label:'▶ Play Playlist', onSelect:() => playBody({ context_uri:p.uri }) }],
+    head: [
+      { label:'▶ Play Playlist', image:imgOf(p), onSelect:() => playBody({ context_uri:p.uri }) },
+      { label:'⇄ Shuffle Playlist', image:imgOf(p), onSelect:() => shuffleContext(p.uri, (p.tracks || p.items || {}).total) },
+    ],
     privateMsg: 'Spotify hides this list from apps',
     pick: it => { const t = it.track || it.item; return t && t.type === 'track' && !t.is_local && t.uri ? t : null; },
     map: (t, i, m) => trackItem(t, i, m, idx => playBody({ context_uri:p.uri, offset:{ uri:m.raw[idx].uri } })) });
@@ -807,6 +831,10 @@ function albumsMenu(){
 function albumTracks(a){
   const img = imgOf(a);
   const m = paged(a.name, `/albums/${a.id}/tracks?limit=50`, { split:true,
+    head: [
+      { label:'▶ Play Album', image:img, onSelect:() => playBody({ context_uri:a.uri }) },
+      { label:'⇄ Shuffle Album', image:img, onSelect:() => shuffleContext(a.uri, a.total_tracks) },
+    ],
     map: (t, i, m) => ({ label:t.name, image:img, info:songInfo(t, a), onSelect:() => playBody({ context_uri:a.uri, offset:{ uri:m.raw[i].uri } }) }) });
   m.image = img;
   return m;
@@ -817,7 +845,10 @@ function artistsMenu(){
 }
 function artistAlbums(ar){
   return paged(ar.name, `/artists/${ar.id}/albums?include_groups=album,single&limit=50`, { split:true,
-    head: [{ label:'▶ Play ' + ar.name + ' Mix', image:imgOf(ar), onSelect:() => playBody({ context_uri:ar.uri }) }],
+    head: [
+      { label:'▶ Play ' + ar.name + ' Mix', image:imgOf(ar), onSelect:() => playBody({ context_uri:ar.uri }) },
+      { label:'⇄ Shuffle ' + ar.name, image:imgOf(ar), onSelect:() => shuffleContext(ar.uri) },
+    ],
     map: a => ({ label:a.name, chevron:true, image:imgOf(a), onSelect:() => push(albumTracks(a)) }) });
 }
 /* Lists with no context URI: play a window of track URIs */
@@ -826,11 +857,11 @@ function playUris(m, idx){
   playBody({ uris, offset:{ position: idx - start } });
 }
 function likedMenu(){
-  return paged('Songs', '/me/tracks?limit=50', { split:true, pick: it => it.track && !it.track.is_local ? it.track : null,
+  return paged('Songs', '/me/tracks?limit=50', { split:true, head: [shuffleListItem()], pick: it => it.track && !it.track.is_local ? it.track : null,
     map: (t, i, m) => trackItem(t, i, m, idx => playUris(m, idx)) });
 }
 function simpleTracks(title, url, pick){
-  return paged(title, url, { split:true, pick: it => { const t = pick(it); return t && t.uri ? t : null; },
+  return paged(title, url, { split:true, head: [shuffleListItem()], pick: it => { const t = pick(it); return t && t.uri ? t : null; },
     map: (t, i, m) => trackItem(t, i, m, idx => playUris(m, idx)) });
 }
 
@@ -1027,7 +1058,8 @@ function searchCategory(q, type, title, ex){
     show:     s => ({ label:s.name, chevron:true, image:imgOf(s), onSelect:() => push(showEpisodes(s)) }),
     episode:  e => ({ label:e.name, image:imgOf(e), info:episodeInfo(e), onSelect:() => playBody({ uris:[e.uri] }) }),
   };
-  return paged(title, url, { ...base, pick: x => x && x.uri ? x : null, map: maps[type] });
+  return paged(title, url, { ...base, head: type === 'track' ? [shuffleListItem()] : undefined,
+    pick: x => x && x.uri ? x : null, map: maps[type] });
 }
 
 /* ================= Hold buttons =================
@@ -1271,8 +1303,13 @@ function toast(msg){
 /* ================= Version & updates =================
    Bump APP_VERSION here AND in version.json for every release. The Home Screen app checks
    version.json (never cached) on launch; if it's newer than this copy, it reloads the new one. */
-const APP_VERSION = '0.0.7';
+const APP_VERSION = '0.0.8';
 const CHANGELOG = [
+  { v:'0.0.8', notes:[
+    'Shuffle in playlists & albums',
+    'Shuffle an artist',
+    'Shuffle Songs in song lists',
+  ]},
   { v:'0.0.7', notes:[
     'Album cover while picking songs',
     'Song, artist & album shown too',
