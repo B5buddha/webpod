@@ -239,7 +239,10 @@
     display:grid; grid-template-rows:auto 1fr; grid-template-columns:100%; justify-items:center; align-items:center;
     box-shadow:none;
   }
-  body.fs.wide .pod { grid-template-rows:100%; grid-template-columns:1fr 1fr; }
+  body.fs.wide .pod { grid-template-rows:100%; grid-template-columns:auto auto; justify-content:space-evenly; }
+  /* Open (near-square): screen and wheel sized as a pair and centred together */
+  body.fs.open .pod { grid-template-rows:auto auto; align-content:space-evenly; }
+  body.fs.open .bezelwrap { align-self:center !important; }
   body.fs .wheel { margin:0; }
   /* Full screen: iOS can leave a strip below the page (around the home bar) that the page can't
      reach. So the faceplate fades top-to-bottom into --f4, the same flat colour painted behind
@@ -1238,8 +1241,13 @@ function toast(msg){
 /* ================= Version & updates =================
    Bump APP_VERSION here AND in version.json for every release. The Home Screen app checks
    version.json (never cached) on launch; if it's newer than this copy, it reloads the new one. */
-const APP_VERSION = '0.0.5';
+const APP_VERSION = '0.0.6';
 const CHANGELOG = [
+  { v:'0.0.6', notes:[
+    'Wheel sized to match the screen',
+    'Better fit when the phone is open',
+    'Bigger screen when sideways',
+  ]},
   { v:'0.0.5', notes:[
     'Faceplate blends into screen edge',
     'No color seam near the home bar',
@@ -1619,13 +1627,19 @@ function layout(){
   const H = vh - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
   const ratio = W / H;
   const wide = ratio > 1.15;              // landscape: side by side
-  const open = ratio > 0.7;               // unfolded (near-square): stacked, bigger screen
+  const open = ratio > 0.6;               // unfolded (much wider than a closed phone's ~0.45): stacked, sized as a pair
   document.body.classList.toggle('wide', wide);
+  document.body.classList.toggle('open', open && !wide);
+  // On a real iPod classic the click wheel is about 80% as wide as the screen. When the phone is open
+  // (or sideways) there's room for those proportions, so size the screen and wheel together.
+  const WHEEL_RATIO = 0.8;
   let s, wd;
   if (wide) {
-    const col = (W - pad) / 2;
-    s = Math.min(col / BEZEL_W, (H * 0.92) / BEZEL_H);
-    wd = Math.min(col * 0.86, H * 0.86);
+    s = Math.min((W - pad * 4) / (BEZEL_W * (1 + WHEEL_RATIO)), (H * 0.92) / BEZEL_H);
+    wd = BEZEL_W * s * WHEEL_RATIO;
+  } else if (open) {
+    s = Math.min(W / BEZEL_W, (H - pad * 4) / (BEZEL_H + BEZEL_W * WHEEL_RATIO));
+    wd = BEZEL_W * s * WHEEL_RATIO;
   } else {
     s = Math.min(W / BEZEL_W, (H * (open ? 0.6 : 0.5)) / BEZEL_H);
     wd = Math.min(W * 0.84, (H - BEZEL_H * s - pad) * 0.86);
