@@ -302,6 +302,14 @@
   .a2hs-card button { width:100%; padding:13px; border:0; border-radius:12px; font:600 15px -apple-system, "Segoe UI", sans-serif; cursor:pointer; }
   .a2hs-card .primary { background:#2f6fe0; color:#fff; margin-bottom:8px; }
   .a2hs-card .secondary { background:rgba(255,255,255,.08); color:#f1f3f4; }
+  .a2hs-card input { width:100%; padding:12px; margin-bottom:12px; border-radius:10px; border:1px solid #3a3d44; background:#0e0f12;
+    color:#f1f3f4; font:16px ui-monospace, Menlo, Consolas, monospace; }
+
+  /* YouTube video on the iPod screen (covers the whole screen, header included) */
+  .ytview { position:absolute; inset:0; z-index:4; background:#000; }
+  .ytview #ytp, .ytview iframe { position:absolute; inset:0; width:100%; height:100%; border:0; }
+  .ytview .ytmsg { position:absolute; left:10px; right:10px; top:50%; transform:translateY(-50%); color:#e8eaed; text-align:center;
+    font:600 12px/1.4 "Helvetica Neue", Helvetica, Arial, sans-serif; z-index:1; pointer-events:none; }
 </style>
 </head>
 <body>
@@ -333,6 +341,16 @@
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 8l5-5 5 5"/><path d="M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7"/></svg>
   Add to Home Screen
 </button>
+<div class="a2hs hidden" id="ytSetup" role="dialog" aria-modal="true" aria-labelledby="ytSetupTitle">
+  <div class="a2hs-card">
+    <h2 id="ytSetupTitle">YouTube API Key</h2>
+    <p>Paste your YouTube Data API key below. It’s saved only in this browser on this device.</p>
+    <input id="ytKeyInput" type="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Paste key here">
+    <button class="primary" id="ytSave">Save</button>
+    <button class="secondary" id="ytCancel">Cancel</button>
+    <button class="secondary hidden" id="ytRemove" style="margin-top:8px">Remove Key</button>
+  </div>
+</div>
 <div class="a2hs hidden" id="a2hs" role="dialog" aria-modal="true" aria-labelledby="a2hsTitle">
   <div class="a2hs-card">
     <h2 id="a2hsTitle">Put Web Pod on your Home Screen</h2>
@@ -597,15 +615,16 @@ const fmt = ms => { ms = Math.max(0, ms|0); const s = Math.floor(ms/1000); retur
 
 function togglePlay(){
   activate();
+  if (top() && top().video) return ytControl('toggle');
   if (!auth.loggedIn) return toast('Connect Spotify first');
   if (!ps) return toast('Pick something to play');
   if (isLocal()) return player.togglePlay();
   ps.position = position(); psAt = performance.now(); ps.paused = !ps.paused; render();
   remoteCmd('PUT', ps.paused ? '/pause' : '/play');
 }
-function nextTrack(){ activate(); if (!ps) return; isLocal() ? player.nextTrack() : remoteCmd('POST', '/next'); }
+function nextTrack(){ activate(); if (top() && top().video) return ytControl('next'); if (!ps) return; isLocal() ? player.nextTrack() : remoteCmd('POST', '/next'); }
 function prevTrack(){
-  activate(); if (!ps) return;
+  activate(); if (top() && top().video) return ytControl('prev'); if (!ps) return;
   if (position() > 3000) return seekTo(0);
   isLocal() ? player.previousTrack() : remoteCmd('POST', '/previous');
 }
@@ -641,6 +660,7 @@ function mainMenu(){
       { label:'Music', chevron:true, onSelect:() => push(musicMenu()) },
       { label:'Made For You', chevron:true, onSelect:() => push(madeForYouMenu()) },
       { label:'Search', chevron:true, onSelect:() => push(searchMenu()) },
+      { label:'YouTube', chevron:true, onSelect:() => push(youtubeMenu()) },
       { label:'Shuffle Songs', onSelect:shuffleSongs },
       ...(canInstall() ? [{ label:'Add to Home Screen', onSelect:openA2hs }] : []),
       { label:'Devices', chevron:true, onSelect:() => push(devicesMenu()) },
@@ -941,10 +961,15 @@ const KEY_START = KEYS.indexOf('A');
 const RESULT_TAGS = { track:'Song', artist:'Artist', album:'Album', playlist:'Playlist', show:'Podcast', episode:'Episode' };
 const RESULTS_PER_TYPE = { track:4, artist:2, album:2, playlist:2, show:2, episode:2 };
 
-function searchMenu(){
-  const m = { title:'Search', search:true, q:'', cursor:KEY_START, mode:'keys', index:0, topRow:0,
+function searchMenu(yt){
+  const m = { title: yt ? 'YouTube Search' : 'Search', search:true, yt:!!yt, q:'', cursor:KEY_START, mode:'keys', index:0, topRow:0,
     results:null, loading:false, req:0, timer:null };
   m.build = () => {
+    if (m.yt) {   // YouTube: searches cost quota, so search only when you pick ▲ (or press Enter)
+      if (m.loading) return [{ label:'Searching YouTube…', dim:true }];
+      if (m.results && m.resultsQ === m.q.trim()) return m.results;
+      return [{ label: m.q.trim() ? 'Pick ▲ to search' : 'Type, then pick ▲ to search', dim:true }];
+    }
     if (m.q.trim()) {
       if (m.loading && !m.results) return [{ label:'Searching…', dim:true }];
       return m.results || [];
@@ -958,6 +983,7 @@ function searchMenu(){
   return m;
 }
 function typeKey(m, key){
+  if (key === KEY_RESULTS && m.yt && m.q.trim() && !(m.results && m.resultsQ === m.q.trim())) return ytSearch(m);
   if (key === KEY_RESULTS) {
     const items = itemsOf(m).filter(it => !it.dim);
     if (!items.length) return toast(m.q ? 'No results yet' : 'Type something first');
@@ -967,7 +993,7 @@ function typeKey(m, key){
   if (key === KEY_DEL) m.q = m.q.slice(0, -1);
   else if (key === KEY_SPACE) { if (m.q && !m.q.endsWith(' ')) m.q += ' '; }
   else if (m.q.length < 60) m.q += key.length === 1 ? key.toLowerCase() : key;
-  queueLiveSearch(m);
+  if (!m.yt) queueLiveSearch(m);
   render();
 }
 function queueLiveSearch(m){
@@ -1062,6 +1088,154 @@ function searchCategory(q, type, title, ex){
     pick: x => x && x.uri ? x : null, map: maps[type] });
 }
 
+/* ================= YouTube =================
+   Search uses the YouTube Data API (needs your own free API key, stored only on this device).
+   Videos play in YouTube's official embedded player, shown on the iPod screen. */
+const YT_KEY = 'yt_api_key', YT_RECENT = 'yt_recent';
+const ytKey = () => (store.get(YT_KEY) || '').trim();
+const decodeHtml = s => { const t = document.createElement('textarea'); t.innerHTML = s || ''; return t.value; };
+const recentVideos = () => { try { return JSON.parse(store.get(YT_RECENT) || '[]'); } catch { return []; } };
+function saveRecentVideo(v){
+  store.set(YT_RECENT, JSON.stringify([v, ...recentVideos().filter(x => x.id !== v.id)].slice(0, 25)));
+}
+function videoItem(v, list, i){
+  return { label:v.title, image:v.thumb, info:{ title:v.title, artist:v.channel, album:v.date || '' },
+    onSelect:() => playVideo(v, list, i) };
+}
+function youtubeMenu(){
+  return { title:'YouTube', split:true, index:0, topRow:0, build:() => {
+    if (!ytKey()) return [
+      { label:'Set Up YouTube', onSelect:openYtSetup },
+      { label:'Needs a free API key', dim:true },
+    ];
+    const rec = recentVideos();
+    return [
+      { label:'Search', chevron:true, onSelect:() => push(searchMenu(true)) },
+      ...(rec.length ? [{ label:'Recently Watched', chevron:true, image:rec[0].thumb, onSelect:() => push(recentVideosMenu()) }] : []),
+      { label:'API Key', value:'Set', onSelect:openYtSetup },
+    ];
+  }};
+}
+function recentVideosMenu(){
+  return { title:'Recently Watched', split:true, index:0, topRow:0, build:() => {
+    const rec = recentVideos();
+    return rec.length ? [...rec.map((v, i) => videoItem(v, rec, i)),
+      { label:'Clear History', onSelect:() => { store.del(YT_RECENT); back(); } }] : [{ label:'Nothing yet', dim:true }];
+  }};
+}
+async function ytSearch(m){
+  const q = m.q.trim(), key = ytKey();
+  if (!key) return openYtSetup();
+  const req = ++m.req;
+  m.loading = true; m.results = null; render();
+  try {
+    const url = 'https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&videoEmbeddable=true&videoSyndicated=true&maxResults=15'
+      + '&q=' + encodeURIComponent(q) + '&key=' + encodeURIComponent(key);
+    const r = await fetch(url);
+    const d = await r.json();
+    if (req !== m.req) return;
+    if (!r.ok) {
+      const reason = d.error && d.error.errors && d.error.errors[0] && d.error.errors[0].reason;
+      throw new Error(reason === 'quotaExceeded' ? 'Daily YouTube search limit reached' :
+        r.status === 400 || r.status === 403 ? 'YouTube key problem: ' + ((d.error && d.error.message) || r.status) : 'YouTube error ' + r.status);
+    }
+    const vids = (d.items || []).filter(it => it.id && it.id.videoId).map(it => ({
+      id: it.id.videoId, title: decodeHtml(it.snippet.title), channel: decodeHtml(it.snippet.channelTitle),
+      thumb: (it.snippet.thumbnails.medium || it.snippet.thumbnails.default || {}).url,
+      date: it.snippet.publishedAt ? new Date(it.snippet.publishedAt).toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' }) : '',
+    }));
+    m.results = vids.length ? vids.map((v, i) => videoItem(v, vids, i)) : [{ label:'No videos found', dim:true }];
+    m.resultsQ = q;
+    if (vids.length) { m.mode = 'results'; m.index = 0; m.topRow = 0; }
+  } catch (e) {
+    if (req !== m.req) return;
+    m.results = [{ label:e.message, dim:true }]; m.resultsQ = q;
+  }
+  m.loading = false;
+  if (top() === m) render();
+}
+
+/* ---- The player ---- */
+let ytApi = null, ytPlayer = null, ytVol = Number(store.get('yt_vol') || 80);
+function loadYtApi(){
+  if (ytApi) return ytApi;
+  ytApi = new Promise((resolve, reject) => {
+    if (window.YT && window.YT.Player) return resolve();
+    window.onYouTubeIframeAPIReady = () => resolve();
+    const s = document.createElement('script');
+    s.src = 'https://www.youtube.com/iframe_api';
+    s.onerror = () => { ytApi = null; reject(new Error('Could not load YouTube')); };
+    document.head.appendChild(s);
+  });
+  return ytApi;
+}
+function playVideo(v, list, idx){
+  saveRecentVideo(v);
+  // Pause Spotify so the two don't play over each other
+  if (ps && !ps.paused) { isLocal() ? player.pause() : remoteCmd('PUT', '/pause'); ps.paused = true; }
+  const cur = top();
+  const view = { title:v.title, yt:true, video:v, list:list || [v], idx: idx || 0 };
+  if (cur && cur.video) { stack[stack.length - 1] = view; render(); } else push(view);
+}
+function destroyVideo(){
+  if (ytPlayer) { try { ytPlayer.destroy(); } catch {} ytPlayer = null; }
+  const el = $('#screen .ytview'); if (el) el.remove();
+}
+function renderVideo(m){
+  let view = $('#screen .ytview');
+  if (view && view.dataset.id === m.video.id) return;
+  destroyVideo();
+  view = document.createElement('div');
+  view.className = 'ytview'; view.dataset.id = m.video.id;
+  view.innerHTML = '<div id="ytp"></div><div class="ytmsg">Loading video…</div>';
+  $('#screen').appendChild(view);
+  loadYtApi().then(() => {
+    if (top() !== m) return;
+    ytPlayer = new YT.Player('ytp', {
+      width:'100%', height:'100%', videoId:m.video.id,
+      playerVars:{ playsinline:1, rel:0, fs:0, controls:1, modestbranding:1 },
+      events:{
+        onReady: e => { view.querySelector('.ytmsg').remove(); try { e.target.setVolume(ytVol); e.target.playVideo(); } catch {} },
+        onError: e => {
+          const msg = e.data === 101 || e.data === 150 ? 'This video can’t be played outside YouTube' : 'Video error (' + e.data + ')';
+          const box = view.querySelector('.ytmsg') || view.appendChild(Object.assign(document.createElement('div'), { className:'ytmsg' }));
+          box.textContent = msg + '. ⏭ for next, MENU to go back.';
+        },
+        onStateChange: e => { if (e.data === 0) ytControl('next', true); },   // ended → next video
+      },
+    });
+  }).catch(e => { const box = view.querySelector('.ytmsg'); if (box) box.textContent = e.message; });
+}
+function ytControl(action, auto){
+  const m = top();
+  if (!m || !m.video) return;
+  if (action === 'toggle') {
+    if (!ytPlayer || !ytPlayer.getPlayerState) return;
+    ytPlayer.getPlayerState() === 1 ? ytPlayer.pauseVideo() : ytPlayer.playVideo();
+  } else if (action === 'next' || action === 'prev') {
+    if (action === 'prev' && ytPlayer && ytPlayer.getCurrentTime && ytPlayer.getCurrentTime() > 3) return ytPlayer.seekTo(0, true);
+    const i = m.idx + (action === 'next' ? 1 : -1);
+    if (i < 0 || i >= m.list.length) return auto ? null : toast(action === 'next' ? 'No more videos' : 'First video');
+    playVideo(m.list[i], m.list, i);
+  } else if (action === 'seek' && ytPlayer && ytPlayer.getCurrentTime) {
+    ytPlayer.seekTo(Math.max(0, ytPlayer.getCurrentTime() + auto), true);
+  }
+}
+function ytVolume(dir){
+  ytVol = Math.max(0, Math.min(100, ytVol + dir * 4));
+  store.set('yt_vol', String(ytVol));
+  try { ytPlayer && ytPlayer.setVolume(ytVol); } catch {}
+  toast('Volume ' + ytVol + (ytVol ? '' : ' (muted)'));
+}
+
+/* ---- Key setup (you paste your own key; it stays in this browser) ---- */
+function openYtSetup(){
+  $('#ytKeyInput').value = ytKey();
+  $('#ytRemove').classList.toggle('hidden', !ytKey());
+  $('#ytSetup').classList.remove('hidden');
+}
+function closeYtSetup(){ $('#ytSetup').classList.add('hidden'); render(); }
+
 /* ================= Hold buttons =================
    Each wheel button (and the centre) has a hold action you can change in Settings › Hold Buttons. */
 const HOLD_MS = 600;
@@ -1101,6 +1275,7 @@ function goMain(){
   stack = [stack[0]]; render();
 }
 function seekBy(ms){
+  if (top() && top().video) { ytControl('seek', ms / 1000); return toast((ms > 0 ? '+' : '−') + Math.abs(ms / 1000) + 's'); }
   if (!ps) return toast('Nothing is playing');
   seekTo(Math.max(0, Math.min(ps.duration - 1000, position() + ms)));
   toast((ms > 0 ? '+' : '−') + Math.abs(ms / 1000) + 's');
@@ -1148,6 +1323,8 @@ function render(){
   $('#stIcon').innerHTML = ps && !ps.paused
     ? '<path d="M1 0v11l9-5.5z" fill="#2876dc"/>'
     : ps ? '<path d="M1 1h3v9H1zM6 1h3v9H6z" fill="#2876dc"/>' : '';
+  if (m.video) return renderVideo(m);
+  destroyVideo();
   if (m.now) return renderNow();
   npKey = null;
   if (m.search) return renderSearch(m);
@@ -1303,8 +1480,14 @@ function toast(msg){
 /* ================= Version & updates =================
    Bump APP_VERSION here AND in version.json for every release. The Home Screen app checks
    version.json (never cached) on launch; if it's newer than this copy, it reloads the new one. */
-const APP_VERSION = '0.0.8';
+const APP_VERSION = '0.0.9';
 const CHANGELOG = [
+  { v:'0.0.9', notes:[
+    'YouTube: search & watch videos',
+    'Video plays on the iPod screen',
+    'Wheel = volume, ⏮⏭ = prev/next',
+    'Recently Watched list',
+  ]},
   { v:'0.0.8', notes:[
     'Shuffle in playlists & albums',
     'Shuffle an artist',
@@ -1444,6 +1627,7 @@ function setMode(m, mode){
 
 function scroll(dir){
   const m = top();
+  if (m.video) { ytVolume(dir); click(); return; }
   if (m.now) {
     if (!ps) return;
     if (m.mode === 'scrub') {
@@ -1477,6 +1661,7 @@ function scroll(dir){
 function select(){
   activate();
   const m = top();
+  if (m.video) return ytControl('toggle');
   if (m.now) {
     if (!ps) return;
     if (m.mode === 'scrub') { if (m.scrubPos != null) seekTo(m.scrubPos); m.scrubPos = null; m.mode = 'progress'; }
@@ -1576,7 +1761,7 @@ document.addEventListener('keydown', e => {
   if (m && m.search && !e.ctrlKey && !e.metaKey && !e.altKey) {   // a computer keyboard types straight in
     if (e.key.length === 1 && /[\p{L}\p{N} '&.\-]/u.test(e.key)) {
       m.mode = 'keys';
-      if (e.key === ' ') { if (m.q && !m.q.endsWith(' ')) m.q += ' '; queueLiveSearch(m); render(); }
+      if (e.key === ' ') typeKey(m, KEY_SPACE);
       else typeKey(m, e.key);
       return e.preventDefault();
     }
@@ -1664,6 +1849,14 @@ async function copyLink(){
   try { await navigator.clipboard.writeText(REDIRECT); ok = true; } catch {}
   toast(ok ? 'Link copied. Paste it into Safari.' : REDIRECT);
 }
+$('#ytSave').addEventListener('click', () => {
+  const k = $('#ytKeyInput').value.trim();
+  if (!/^[\w-]{30,60}$/.test(k)) return toast('That doesn’t look like an API key');
+  store.set(YT_KEY, k); closeYtSetup(); toast('YouTube is ready');
+});
+$('#ytCancel').addEventListener('click', closeYtSetup);
+$('#ytRemove').addEventListener('click', () => { store.del(YT_KEY); closeYtSetup(); toast('YouTube key removed'); });
+$('#ytSetup').addEventListener('click', e => { if (e.target.id === 'ytSetup') closeYtSetup(); });
 $('#a2hsBtn').addEventListener('click', openA2hs);
 $('#a2hs').addEventListener('click', e => { if (e.target.id === 'a2hs') closeA2hs(); });
 $('#a2hsPrimary').addEventListener('click', () => { if ($('#a2hsPrimary').textContent === 'Copy Link') copyLink(); else closeA2hs(); });
