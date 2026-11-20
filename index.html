@@ -228,8 +228,8 @@
      Closed / portrait: screen on top, wheel below.
      Open / wide: screen and wheel side by side, one per half (so a centre hinge falls between them). */
   .bezel { width:292px; transform-origin: top left; }
-  .bezelwrap { flex:none; }
-  body.fs { position:fixed; inset:0; padding:0; overflow:hidden; display:block; }
+  .bezelwrap { flex:none; overflow:hidden; }   /* the screen can never spill outside its frame */
+  body.fs { position:fixed; inset:0; padding:0; overflow:hidden; display:block; background-image:none; }
   body.fs .panel { display:none; }
   body.fs .podwrap { position:fixed; inset:0; width:auto !important; height:auto !important; overflow:hidden; border-radius:0; }
   body.fs .pod {
@@ -1224,8 +1224,13 @@ function toast(msg){
 /* ================= Version & updates =================
    Bump APP_VERSION here AND in version.json for every release. The Home Screen app checks
    version.json (never cached) on launch; if it's newer than this copy, it reloads the new one. */
-const APP_VERSION = '0.0.3';
+const APP_VERSION = '0.0.4';
 const CHANGELOG = [
+  { v:'0.0.4', notes:[
+    'Fixed white bar after rotating',
+    'Re-fits after unfolding or turning',
+    'Edges match your faceplate color',
+  ]},
   { v:'0.0.3', notes:[
     'Fixed Add to Home Screen guide',
     'Steps for Safari, Chrome & in-app',
@@ -1289,6 +1294,17 @@ const FACES = [
 function applyFace(id = settings.face){
   const f = FACES.find(x => x.id === id) || FACES[0];
   $('#pod').className = 'pod face-' + f.id + (f.light ? ' light' : '') + (f.metal ? ' metal' : '');
+  paintEdge();
+}
+/* Full screen: paint the page behind the device (and the browser's status-bar tint) in the faceplate
+   colour, so any gap while the phone rotates or unfolds blends in instead of showing a bar. */
+function paintEdge(){
+  const fs = document.body.classList.contains('fs');
+  const edge = fs ? getComputedStyle($('#pod')).getPropertyValue('--f2').trim() : '';
+  document.documentElement.style.backgroundColor = edge;
+  document.body.style.backgroundColor = edge;
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', edge || '#0d0f12');
 }
 /* Pick a colour: scrolling previews it on the device, the centre button keeps it, MENU puts the old one back */
 function facesMenu(){
@@ -1558,14 +1574,15 @@ matchMedia('(display-mode: standalone)').addEventListener?.('change', () => { sy
 syncA2hs();
 const BEZEL_W = 292, BEZEL_H = 222;
 function wantsFullscreen(){
+  if (FORCE_FS) return true;
   if (!auth.loggedIn) return false;
-  return FORCE_FS || navigator.standalone === true || matchMedia('(display-mode: standalone)').matches
+  return navigator.standalone === true || matchMedia('(display-mode: standalone)').matches
     || matchMedia('(pointer: coarse)').matches;
 }
 function layout(){
   const pod = $('#pod'), wrap = $('#podwrap'), bw = $('#bezelwrap'), bezel = $('#bezel'), wheel = $('#wheel');
   const fs = wantsFullscreen();
-  document.body.classList.toggle('fs', fs);
+  if (document.body.classList.contains('fs') !== fs) { document.body.classList.toggle('fs', fs); paintEdge(); }
   if (!fs) {
     document.body.classList.remove('wide');
     bezel.style.transform = ''; bw.style.width = bw.style.height = ''; wheel.style.removeProperty('--wd');
@@ -1574,7 +1591,9 @@ function layout(){
     wrap.style.width = 340 * s + 'px'; wrap.style.height = 566 * s + 'px';
     return;
   }
-  const vw = innerWidth, vh = innerHeight;
+  // clientWidth/Height track the real layout viewport more reliably than innerWidth/Height during a rotation
+  const de = document.documentElement;
+  const vw = de.clientWidth || innerWidth, vh = de.clientHeight || innerHeight;
   const pad = Math.round(Math.max(12, Math.min(28, Math.min(vw, vh) * 0.04)));
   pod.style.setProperty('--pad', pad + 'px');
   const cs = getComputedStyle(pod);
@@ -1595,11 +1614,22 @@ function layout(){
   }
   bezel.style.transform = `scale(${s})`;
   bw.style.width = BEZEL_W * s + 'px'; bw.style.height = BEZEL_H * s + 'px';
+  bw.style.borderRadius = 10 * s + 'px';
   wheel.style.setProperty('--wd', Math.max(140, wd) + 'px');
 }
-addEventListener('resize', layout);
-addEventListener('orientationchange', () => setTimeout(layout, 250));
-if (window.visualViewport) visualViewport.addEventListener('resize', layout);
+/* Phones (and foldables when opened/closed) report the new size late after a rotation,
+   so lay out now and again as the size settles. */
+let layoutTimers = [];
+function scheduleLayout(){
+  layout();
+  layoutTimers.forEach(clearTimeout);
+  layoutTimers = [100, 300, 700, 1200].map(ms => setTimeout(layout, ms));
+}
+addEventListener('resize', scheduleLayout);
+addEventListener('orientationchange', scheduleLayout);
+if (window.visualViewport) visualViewport.addEventListener('resize', scheduleLayout);
+if (screen.orientation && screen.orientation.addEventListener) screen.orientation.addEventListener('change', scheduleLayout);
+matchMedia('(orientation: portrait)').addEventListener?.('change', scheduleLayout);
 layout();
 
 function syncPanel(){
