@@ -96,6 +96,17 @@
   .np.vol .volrow { display:flex; margin-top:6px; }
   .np.vol .progrow { display:none; }
 
+  /* Search */
+  .searchview { position:absolute; inset:0; display:flex; flex-direction:column; }
+  .sform { display:flex; align-items:center; gap:5px; margin:5px 6px 4px; height:24px; padding:0 8px; border-radius:12px;
+    background:#fff; border:1px solid #9aa0a6; box-shadow: inset 0 1px 2px rgba(0,0,0,.15); color:#666; }
+  .sform.sel { border-color:#2876dc; box-shadow: 0 0 0 2px rgba(58,142,240,.45); }
+  .sform svg { width:12px; height:12px; flex:none; }
+  .sform input { flex:1; min-width:0; border:0; outline:0; background:transparent; font:700 13px "Helvetica Neue", Helvetica, Arial, sans-serif;
+    color:#000; padding:0; -webkit-appearance:none; appearance:none; }
+  .sform input::-webkit-search-decoration, .sform input::-webkit-search-cancel-button { -webkit-appearance:none; }
+  .srows { flex:1; overflow:hidden; }
+
   .toast { position:absolute; left:8px; right:8px; bottom:8px; background:rgba(0,0,0,.82); color:#fff; font-size:11px;
     padding:6px 8px; border-radius:6px; z-index:5; opacity:0; transition:opacity .2s; pointer-events:none; }
   .toast.on { opacity:1; }
@@ -521,7 +532,8 @@ let stack = [];
 const top = () => stack[stack.length - 1];
 const push = m => { stack.push(m); render(); };
 const imgOf = o => o && o.images && o.images.length ? (o.images[1] || o.images[0]).url : null;
-const artistsOf = t => (t.artists || []).map(a => a.name).join(', ');
+const artistsOf = t => t.artists && t.artists.length ? t.artists.map(a => a.name).join(', ') : (t.show && t.show.name) || '';
+const artOf = t => t ? imgOf(t.album) || imgOf(t.show) || imgOf(t) : null;   // tracks and podcast episodes
 
 function mainMenu(){
   return { title:'Web Pod', split:true, index:0, topRow:0, build(){
@@ -532,6 +544,8 @@ function mainMenu(){
     ];
     const items = [
       { label:'Music', chevron:true, onSelect:() => push(musicMenu()) },
+      { label:'Made For You', chevron:true, onSelect:() => push(madeForYouMenu()) },
+      { label:'Search', chevron:true, onSelect:() => push(searchMenu()) },
       { label:'Shuffle Songs', onSelect:shuffleSongs },
       ...(canInstall() ? [{ label:'Add to Home Screen', onSelect:openA2hs }] : []),
       { label:'Devices', chevron:true, onSelect:() => push(devicesMenu()) },
@@ -548,6 +562,7 @@ function musicMenu(){
     { label:'Artists', chevron:true, onSelect:() => push(artistsMenu()) },
     { label:'Albums', chevron:true, onSelect:() => push(albumsMenu()) },
     { label:'Songs', chevron:true, onSelect:() => push(likedMenu()) },
+    { label:'Podcasts', chevron:true, onSelect:() => push(showsMenu()) },
     { label:'Top Songs', chevron:true, onSelect:() => push(simpleTracks('Top Songs', '/me/top/tracks?limit=50&time_range=medium_term', it => it)) },
     { label:'Recently Played', chevron:true, onSelect:() => push(simpleTracks('Recently Played', '/me/player/recently-played?limit=50', it => it.track)) },
   ]};
@@ -620,7 +635,8 @@ function devicesMenu(){
 
 /* Generic paginated menu */
 function paged(title, url, opts){
-  const m = { title, split:!!opts.split, index:0, topRow:0, items:[], raw:[], next:url, loading:false, fallback:opts.fallback };
+  const m = { title, split:!!opts.split, index:0, topRow:0, items: opts.head ? opts.head.slice() : [], raw:[], next:url,
+    loading:false, fallback:opts.fallback, emptyMsg:opts.emptyMsg };
   m.loadMore = async () => {
     if (m.loading || !m.next) return;
     m.loading = true; render();
@@ -629,7 +645,7 @@ function paged(title, url, opts){
       try { d = await api(m.next); }
       catch (e) {
         if (m.fallback && !m.raw.length) { m.next = m.fallback; m.fallback = null; d = await api(m.next); }
-        else if (e.status === 400 && /limit=50/.test(m.next)) { m.next = m.next.replace('limit=50','limit=10'); d = await api(m.next); }
+        else if (e.status === 400 && /limit=(?!5\b)\d+/.test(m.next)) { m.next = m.next.replace(/limit=\d+/, 'limit=5'); d = await api(m.next); }
         else throw e;
       }
       const page = opts.extract ? opts.extract(d) : d;
@@ -641,7 +657,11 @@ function paged(title, url, opts){
         m.raw.push(val);
         m.items.push(opts.map(val, idx, m));
       }
-    } catch (e) { m.error = e.message; m.next = null; }
+    } catch (e) {
+      m.error = (e.status === 404 || e.status === 403) && opts.privateMsg ? opts.privateMsg : e.message;
+      m.next = null;
+      if (m.items.length) m.items.push({ label:m.error, dim:true });
+    }
     m.loading = false; render();
   };
   m.loadMore();
@@ -659,6 +679,8 @@ function playlistsMenu(){
 function playlistTracks(p){
   const m = paged(p.name, `/playlists/${p.id}/tracks?limit=50`, {
     fallback: `/playlists/${p.id}/items?limit=50`,
+    head: [{ label:'▶ Play Playlist', onSelect:() => playBody({ context_uri:p.uri }) }],
+    privateMsg: 'Spotify hides this list from apps',
     pick: it => { const t = it.track || it.item; return t && t.type === 'track' && !t.is_local && t.uri ? t : null; },
     map: (t, i, m) => trackItem(t, i, m, idx => playBody({ context_uri:p.uri, offset:{ uri:m.raw[idx].uri } })) });
   m.image = imgOf(p);
@@ -681,6 +703,7 @@ function artistsMenu(){
 }
 function artistAlbums(ar){
   return paged(ar.name, `/artists/${ar.id}/albums?include_groups=album,single&limit=50`, { split:true,
+    head: [{ label:'▶ Play ' + ar.name + ' Mix', image:imgOf(ar), onSelect:() => playBody({ context_uri:ar.uri }) }],
     map: a => ({ label:a.name, chevron:true, image:imgOf(a), onSelect:() => push(albumTracks(a)) }) });
 }
 /* Lists with no context URI: play a window of track URIs */
@@ -712,6 +735,109 @@ async function shuffleSongs(){
   } catch (e) { toast(e.message); }
 }
 
+/* ================= Made For You =================
+   Spotify doesn't let newer apps read its own personalised playlists (Daily Mix, Discover Weekly…).
+   So this section builds mixes from your own listening, and lists Spotify mixes you've saved,
+   which can still be played by name. */
+const shuffled = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+async function playTrackList(url, pick, title){
+  toast('Starting ' + title + '…');
+  try {
+    const d = await api(url);
+    const uris = [...new Set((d.items || []).map(pick).filter(t => t && t.uri && !t.is_local).map(t => t.uri))];
+    if (!uris.length) return toast('Nothing here yet. Listen a bit more!');
+    await playBody({ uris: shuffled(uris) });
+  } catch (e) { toast(e.message); }
+}
+function madeForYouMenu(){
+  return { title:'Made For You', split:true, index:0, topRow:0, items:[
+    { label:'Top Mixes', chevron:true, onSelect:() => push(topMixesMenu()) },
+    { label:'Spotify Mixes', chevron:true, onSelect:() => push(spotifyMixesMenu()) },
+    { label:'On Repeat', onSelect:() => playTrackList('/me/top/tracks?limit=50&time_range=short_term', t => t, 'On Repeat') },
+    { label:'Your Top Songs', onSelect:() => playTrackList('/me/top/tracks?limit=50&time_range=medium_term', t => t, 'Your Top Songs') },
+    { label:'All-Time Favorites', onSelect:() => playTrackList('/me/top/tracks?limit=50&time_range=long_term', t => t, 'All-Time Favorites') },
+    { label:'Recently Played Mix', onSelect:() => playTrackList('/me/player/recently-played?limit=50', it => it.track, 'Recently Played Mix') },
+  ]};
+}
+function topMixesMenu(){
+  return paged('Top Mixes', '/me/top/artists?limit=50&time_range=medium_term', { split:true,
+    emptyMsg:'Listen more to build mixes',
+    map: a => ({ label:a.name + ' Mix', image:imgOf(a), onSelect:() => playBody({ context_uri:a.uri }) }) });
+}
+function spotifyMixesMenu(){
+  return paged('Spotify Mixes', '/me/playlists?limit=50', { split:true,
+    emptyMsg:'Save Daily Mixes in Spotify',
+    pick: p => p && p.owner && p.owner.id === 'spotify' ? p : null,
+    map: p => ({ label:p.name, image:imgOf(p), onSelect:() => playBody({ context_uri:p.uri }) }) });
+}
+
+/* ================= Podcasts ================= */
+function showsMenu(){
+  return paged('Podcasts', '/me/shows?limit=50', { split:true, emptyMsg:'No saved podcasts', pick: it => it.show,
+    map: s => ({ label:s.name, chevron:true, image:imgOf(s), onSelect:() => push(showEpisodes(s)) }) });
+}
+function showEpisodes(s){
+  return paged(s.name, `/shows/${s.id}/episodes?limit=50`, { split:true,
+    map: e => ({ label:e.name, image:imgOf(e) || imgOf(s), onSelect:() => playBody({ uris:[e.uri] }) }) });
+}
+
+/* ================= Search ================= */
+const RECENT_KEY = 'pod_recent_searches';
+const recentSearches = () => { try { return JSON.parse(store.get(RECENT_KEY) || '[]'); } catch { return []; } };
+function saveRecent(q){
+  store.set(RECENT_KEY, JSON.stringify([q, ...recentSearches().filter(x => x.toLowerCase() !== q.toLowerCase())].slice(0, 8)));
+}
+function searchMenu(){
+  return { title:'Search', search:true, index:-1, topRow:0, build(){
+    const r = recentSearches();
+    const items = r.map(q => ({ label:q, onSelect:() => runSearch(q) }));
+    if (r.length) items.push({ label:'Clear Recent Searches', onSelect:() => { store.del(RECENT_KEY); top().index = -1; render(); } });
+    return items;
+  }};
+}
+function runSearch(q){
+  q = q.trim(); if (!q) return;
+  saveRecent(q);
+  push(searchResultsMenu(q));
+}
+const SEARCH_TYPES = [
+  ['track',    'Songs',     d => d.tracks],
+  ['artist',   'Artists',   d => d.artists],
+  ['album',    'Albums',    d => d.albums],
+  ['playlist', 'Playlists', d => d.playlists],
+  ['show',     'Podcasts',  d => d.shows],
+  ['episode',  'Episodes',  d => d.episodes],
+];
+function searchResultsMenu(q){
+  const m = { title:q, split:true, index:0, topRow:0, items:[{ label:'Searching…', dim:true }] };
+  const url = lim => `/search?q=${encodeURIComponent(q)}&type=${SEARCH_TYPES.map(t => t[0]).join(',')}&limit=${lim}`;
+  api(url(10)).catch(e => e.status === 400 ? api(url(5)) : Promise.reject(e)).then(d => {
+    m.items = [];
+    for (const [type, title, ex] of SEARCH_TYPES) {
+      const page = d && ex(d);
+      const first = page && (page.items || []).find(Boolean);
+      if (!first) continue;
+      m.items.push({ label:title, chevron:true, image: artOf(first), onSelect:() => push(searchCategory(q, type, title, ex)) });
+    }
+    if (!m.items.length) m.items = [{ label:'No results', dim:true }];
+    render();
+  }).catch(e => { m.items = [{ label:e.message, dim:true }]; render(); });
+  return m;
+}
+function searchCategory(q, type, title, ex){
+  const url = `/search?q=${encodeURIComponent(q)}&type=${type}&limit=10`;
+  const base = { split:true, extract: d => (d && ex(d)) || { items:[] } };
+  const maps = {
+    track:    (t, i, m) => ({ label:t.name + ' – ' + artistsOf(t), image:artOf(t), onSelect:() => playUris(m, i) }),
+    artist:   a => ({ label:a.name, chevron:true, image:imgOf(a), onSelect:() => push(artistAlbums(a)) }),
+    album:    a => ({ label:a.name + ' – ' + artistsOf(a), chevron:true, image:imgOf(a), onSelect:() => push(albumTracks(a)) }),
+    playlist: p => ({ label:p.name, chevron:true, image:imgOf(p), onSelect:() => push(playlistTracks(p)) }),
+    show:     s => ({ label:s.name, chevron:true, image:imgOf(s), onSelect:() => push(showEpisodes(s)) }),
+    episode:  e => ({ label:e.name, image:imgOf(e), onSelect:() => playBody({ uris:[e.uri] }) }),
+  };
+  return paged(title, url, { ...base, pick: x => x && x.uri ? x : null, map: maps[type] });
+}
+
 function pushNow(){
   if (top() && top().now) return render();
   push({ title:'Now Playing', now:true, mode:'progress' });
@@ -733,6 +859,7 @@ function render(){
     : ps ? '<path d="M1 1h3v9H1zM6 1h3v9H6z" fill="#2876dc"/>' : '';
   if (m.now) return renderNow();
   npKey = null;
+  if (m.search) return renderSearch(m);
 
   const items = itemsOf(m);
   if (m.index >= items.length) m.index = Math.max(0, items.length - 1);
@@ -748,7 +875,7 @@ function render(){
   });
   if (m.loading && shown.length < ROWS) rows += '<div class="row dim">Loading…</div>';
   else if (!items.length && m.error) rows += `<div class="row dim">${esc(m.error)}</div>`;
-  else if (!items.length && !m.loading && m.raw) rows += '<div class="row dim">Nothing here</div>';
+  else if (!items.length && !m.loading && m.raw) rows += `<div class="row dim">${esc(m.emptyMsg || 'Nothing here')}</div>`;
 
   const hasBar = items.length > ROWS;
   let bar = '';
@@ -760,7 +887,7 @@ function render(){
 
   const body = $('#body');
   let listEl = body.querySelector('.list');
-  if (!listEl || body.querySelector('.np')) { body.innerHTML = '<div class="list"></div><div class="side"></div>'; listEl = body.querySelector('.list'); sideKey = null; }
+  if (!listEl || body.querySelector('.np, .searchview')) { body.innerHTML = '<div class="list"></div><div class="side"></div>'; listEl = body.querySelector('.list'); sideKey = null; }
   listEl.className = 'list' + (m.split ? ' split' : '') + (hasBar ? ' hasbar' : '');
   listEl.innerHTML = rows + bar;
   const side = body.querySelector('.side');
@@ -768,13 +895,44 @@ function render(){
   if (m.split) {
     const sel = items[m.index];
     const t = curTrack();
-    const src = (sel && sel.image) || (t && imgOf(t.album)) || null;
+    const src = (sel && sel.image) || artOf(t) || null;
     if (src !== sideKey) {
       sideKey = src;
       side.innerHTML = src ? `<img src="${esc(src)}" alt="">` : '<div class="ph">♪</div>';
     }
   }
   if (m.next && !m.loading && m.index >= items.length - 6) m.loadMore();
+}
+
+/* Search screen: a text box (opens the phone keyboard) above your recent searches */
+const SEARCH_ROWS = 7;
+function renderSearch(m){
+  const body = $('#body');
+  let view = body.querySelector('.searchview');
+  if (!view) {
+    body.innerHTML = `<div class="searchview">
+      <form class="sform" id="sform" action="#" autocomplete="off">
+        <svg viewBox="0 0 16 16"><circle cx="6.5" cy="6.5" r="4.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M10 10l4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <input id="sq" type="search" enterkeyhint="search" placeholder="Songs, artists, podcasts…" autocapitalize="off" autocorrect="off" spellcheck="false">
+      </form>
+      <div class="srows"></div></div>`;
+    view = body.querySelector('.searchview');
+    $('#sform').addEventListener('submit', e => { e.preventDefault(); const q = $('#sq').value; $('#sq').blur(); runSearch(q); });
+    $('#sq').addEventListener('focus', () => { m.index = -1; renderSearch(m); });
+    if (m.index < 0) $('#sq').focus({ preventScroll:true });   // opens the keyboard (same tap)
+  }
+  const items = itemsOf(m);
+  if (m.index >= items.length) m.index = items.length - 1;
+  if (m.index >= 0) {
+    if (m.index < m.topRow) m.topRow = m.index;
+    if (m.index >= m.topRow + SEARCH_ROWS) m.topRow = m.index - SEARCH_ROWS + 1;
+  }
+  let rows = items.length ? '' : '<div class="row dim">Type, then press Search</div>';
+  items.slice(m.topRow, m.topRow + SEARCH_ROWS).forEach((it, i) => {
+    rows += `<div class="row${m.topRow + i === m.index ? ' sel' : ''}">${esc(it.label)}</div>`;
+  });
+  view.querySelector('.sform').classList.toggle('sel', m.index < 0);
+  view.querySelector('.srows').innerHTML = rows;
 }
 
 const spk = big => `<svg viewBox="0 0 12 12"><path d="M1 4h2l3-3v10L3 8H1z" fill="#333"/>${big ? '<path d="M8 3.5a4 4 0 010 5M9.5 2a6 6 0 010 8" stroke="#333" fill="none"/>' : ''}</svg>`;
@@ -791,12 +949,12 @@ function renderNow(){
       : tw ? `${(tw.previous_tracks || []).length + 1} of ${(tw.previous_tracks || []).length + 1 + (tw.next_tracks || []).length}+` : '';
     body.innerHTML = `<div class="np">
       <div class="np-top">
-        <div class="np-art" style="background-image:url('${esc(imgOf(t.album) || '')}')"></div>
+        <div class="np-art" style="background-image:url('${esc(artOf(t) || '')}')"></div>
         <div class="np-meta">
           <div class="np-count">${esc(count)}</div>
           <div class="np-title">${esc(t.name)}</div>
           <div class="np-artist">${esc(artistsOf(t))}</div>
-          <div class="np-album">${esc(t.album && t.album.name)}</div>
+          <div class="np-album">${esc((t.album && t.album.name) || (t.show && t.show.publisher) || '')}</div>
         </div>
       </div>
       <div class="np-bottom">
@@ -869,6 +1027,11 @@ function scroll(dir){
     click(); return;
   }
   const items = itemsOf(m);
+  if (m.search) {                       // -1 = the search box
+    const ni = Math.max(-1, Math.min(items.length - 1, m.index + dir));
+    if (ni !== m.index) { m.index = ni; if (ni >= 0) $('#sq') && $('#sq').blur(); click(); render(); }
+    return;
+  }
   const ni = Math.max(0, Math.min(items.length - 1, m.index + dir));
   if (ni !== m.index) { m.index = ni; click(); render(); }
 }
@@ -881,10 +1044,19 @@ function select(){
     else setMode(m, 'scrub');
     return;
   }
+  if (m.search && m.index < 0) {        // center on the search box: search, or open the keyboard
+    const q = $('#sq') ? $('#sq').value.trim() : '';
+    if (q) { $('#sq').blur(); runSearch(q); } else $('#sq') && $('#sq').focus();
+    return;
+  }
   const it = itemsOf(m)[m.index];
   if (it && it.onSelect) it.onSelect();
 }
-function back(){ activate(); if (stack.length > 1) { stack.pop(); render(); } }
+function back(){
+  activate();
+  if (document.activeElement && document.activeElement.id === 'sq') document.activeElement.blur();
+  if (stack.length > 1) { stack.pop(); render(); }
+}
 
 /* Click wheel: drag in a circle to scroll, tap the ring for buttons */
 const wheel = $('#wheel');
@@ -929,6 +1101,11 @@ $('#pod').addEventListener('wheel', e => {
 }, { passive:false });
 
 document.addEventListener('keydown', e => {
+  if (e.target.id === 'sq') {             // in the search box: Esc = back, ↓ = into recent searches
+    if (e.key === 'Escape') { back(); e.preventDefault(); }
+    else if (e.key === 'ArrowDown') { e.target.blur(); scroll(1); e.preventDefault(); }
+    return;
+  }
   if (e.target.tagName === 'INPUT') return;
   if (!$('#a2hs').classList.contains('hidden')) { if (e.key === 'Escape') closeA2hs(); return; }
   const k = e.key;
