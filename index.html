@@ -643,6 +643,7 @@ function settingsMenu(){
       { label:'Clicker', value: settings.clicker ? 'On' : 'Off', onSelect:() => { settings.clicker = !settings.clicker; saveSettings(); render(); } },
       { label:'Faceplate', value: (FACES.find(f => f.id === settings.face) || FACES[0]).name, onSelect:() => push(facesMenu()) },
       { label:'Hold Buttons', chevron:true, onSelect:() => push(holdButtonsMenu()) },
+      { label:'Version', value:APP_VERSION, onSelect:() => push(versionMenu()) },
       { label:'Night Mode', value: { off:'Off', on:'On', auto:'Auto' }[settings.night] || 'Off', onSelect:() => {
           settings.night = { off:'on', on:'auto', auto:'off' }[settings.night] || 'on';
           saveSettings(); applyNight(); render();
@@ -1211,6 +1212,50 @@ function toast(msg){
   clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('on'), msg === DRM_MSG ? 8000 : 3200);
 }
 
+/* ================= Version & updates =================
+   Bump APP_VERSION here AND in version.json for every release. The Home Screen app checks
+   version.json (never cached) on launch; if it's newer than this copy, it reloads the new one. */
+const APP_VERSION = '0.0.1';
+const CHANGELOG = [
+  { v:'0.0.1', notes:[
+    'First numbered version',
+    'Click wheel, menus & Now Playing',
+    'Spotify remote control on iPhone',
+    'Made For You, Search & Podcasts',
+    'Click-wheel keyboard',
+    'Night mode',
+    '20 faceplates incl. dark finishes',
+    'Custom hold buttons',
+    'Automatic updates',
+  ]},
+];
+let lastUpdateCheck = 0;
+async function checkForUpdate(manual){
+  if (!manual && Date.now() - lastUpdateCheck < 60000) return;
+  lastUpdateCheck = Date.now();
+  try {
+    const r = await fetch('version.json?t=' + Date.now(), { cache:'no-store' });
+    const { version } = await r.json();
+    if (version && version !== APP_VERSION) {
+      // Only try once per version per session, so a slow CDN can't cause a reload loop
+      let tried = null; try { tried = sessionStorage.getItem('pod_update_tried'); } catch {}
+      if (tried === version && !manual) return;
+      try { sessionStorage.setItem('pod_update_tried', version); } catch {}
+      toast('Updating to ' + version + '…');
+      setTimeout(() => location.replace(REDIRECT + '?v=' + encodeURIComponent(version)), 700);
+    } else if (manual) toast('You’re up to date (' + APP_VERSION + ')');
+  } catch { if (manual) toast('Couldn’t check for updates'); }
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkForUpdate(false); });
+function versionMenu(){
+  return { title:'Version', index:0, topRow:0, items:[
+    { label:'Web Pod', value:APP_VERSION },
+    { label:'Check for Updates', onSelect:() => checkForUpdate(true) },
+    ...CHANGELOG.map(c => ({ label:'What’s New in ' + c.v, chevron:true, onSelect:() => push(
+      { title:c.v, index:0, topRow:0, items:c.notes.map(n => ({ label:'• ' + n })) }) })),
+  ]};
+}
+
 /* ---- Faceplates & night mode ---- */
 const FACES = [
   { id:'silver', name:'Silver', light:true }, { id:'black', name:'Black' }, { id:'white', name:'White', light:true },
@@ -1524,6 +1569,10 @@ $('#logout').addEventListener('click', logout);
     if (await checkDrm()) initPlayer().catch(() => {});
     poll();
   }
+  // Tidy the "?v=" left by an update reload, then look for a newer version
+  const qs = new URLSearchParams(location.search);
+  if (qs.has('v') && !qs.has('code')) history.replaceState(null, '', REDIRECT + (FORCE_FS ? '?fs' : ''));
+  checkForUpdate(false);
 })();
 })();
 </script>
