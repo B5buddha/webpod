@@ -626,6 +626,7 @@ function settingsMenu(){
           try { await api(`/me/player/repeat?state=${next}${devQ()}`, { method:'PUT' }); } catch (e) { toast(e.message); } } },
       { label:'Clicker', value: settings.clicker ? 'On' : 'Off', onSelect:() => { settings.clicker = !settings.clicker; saveSettings(); render(); } },
       { label:'Faceplate', value: (FACES.find(f => f.id === settings.face) || FACES[0]).name, onSelect:() => push(facesMenu()) },
+      { label:'Hold Buttons', chevron:true, onSelect:() => push(holdButtonsMenu()) },
       { label:'Night Mode', value: { off:'Off', on:'On', auto:'Auto' }[settings.night] || 'Off', onSelect:() => {
           settings.night = { off:'on', on:'auto', auto:'off' }[settings.night] || 'on';
           saveSettings(); applyNight(); render();
@@ -966,6 +967,73 @@ function searchCategory(q, type, title, ex){
   return paged(title, url, { ...base, pick: x => x && x.uri ? x : null, map: maps[type] });
 }
 
+/* ================= Hold buttons =================
+   Each wheel button (and the centre) has a hold action you can change in Settings › Hold Buttons. */
+const HOLD_MS = 600;
+let escHeld = false;
+addEventListener('keyup', e => { if (e.key === 'Escape') escHeld = false; });
+const HOLD_BUTTONS = [
+  { id:'menu',   name:'MENU' },
+  { id:'prev',   name:'Previous ⏮' },
+  { id:'next',   name:'Next ⏭' },
+  { id:'play',   name:'Play/Pause ⏯' },
+  { id:'center', name:'Center' },
+];
+const HOLD_DEFAULTS = { menu:'now', prev:'back15', next:'fwd15', play:'none', center:'none' };
+const HOLD_ACTIONS = {
+  none:       { name:'Nothing',        run:() => {} },
+  now:        { name:'Now Playing',    run:() => goNowPlaying() },
+  main:       { name:'Main Menu',      run:() => { goMain(); } },
+  playpause:  { name:'Play/Pause',     run:() => togglePlay() },
+  next:       { name:'Next Track',     run:() => nextTrack() },
+  prev:       { name:'Previous Track', run:() => prevTrack() },
+  fwd15:      { name:'Forward 15s',    run:() => seekBy(15000), repeat:true },
+  back15:     { name:'Back 15s',       run:() => seekBy(-15000), repeat:true },
+  shuffle:    { name:'Shuffle Songs',  run:() => shuffleSongs() },
+  search:     { name:'Search',         run:() => { goMain(); push(searchMenu()); } },
+  madeforyou: { name:'Made For You',   run:() => { goMain(); push(madeForYouMenu()); } },
+  devices:    { name:'Devices',        run:() => { goMain(); push(devicesMenu()); } },
+  night:      { name:'Night Mode',     run:() => toggleNight() },
+};
+const holdActionFor = btn => (settings.holds && HOLD_ACTIONS[settings.holds[btn]]) ? settings.holds[btn] : HOLD_DEFAULTS[btn];
+function runHoldAction(action){
+  if (!auth.loggedIn && !['none', 'night'].includes(action)) return toast('Connect Spotify first');
+  click();
+  HOLD_ACTIONS[action].run();
+}
+function goMain(){
+  for (let i = stack.length - 1; i > 0; i--) if (stack[i].onLeave) stack[i].onLeave();
+  stack = [stack[0]]; render();
+}
+function seekBy(ms){
+  if (!ps) return toast('Nothing is playing');
+  seekTo(Math.max(0, Math.min(ps.duration - 1000, position() + ms)));
+  toast((ms > 0 ? '+' : '−') + Math.abs(ms / 1000) + 's');
+}
+function toggleNight(){
+  settings.night = $('#screen').classList.contains('night') ? 'off' : 'on';
+  saveSettings(); applyNight(); render();
+}
+function holdButtonsMenu(){
+  return { title:'Hold Buttons', index:0, topRow:0, build: () => [
+    ...HOLD_BUTTONS.map(b => ({ label:b.name, value:HOLD_ACTIONS[holdActionFor(b.id)].name, onSelect:() => push(holdActionMenu(b)) })),
+    { label:'Reset to Defaults', onSelect:() => { settings.holds = { ...HOLD_DEFAULTS }; saveSettings(); toast('Hold buttons reset'); render(); } },
+  ]};
+}
+function holdActionMenu(b){
+  const ids = Object.keys(HOLD_ACTIONS);
+  return { title:'Hold ' + b.name.replace(/ [^\w ]+$/, ''), index: Math.max(0, ids.indexOf(holdActionFor(b.id))), topRow:0,
+    build: () => ids.map(id => ({ label:HOLD_ACTIONS[id].name, value: id === holdActionFor(b.id) ? '✓' : '',
+      onSelect: () => { settings.holds = { ...HOLD_DEFAULTS, ...(settings.holds || {}), [b.id]: id }; saveSettings(); back(); } })) };
+}
+function goNowPlaying(){
+  if (!curTrack()) { toast('Nothing is playing'); return; }
+  if (top().now) return;
+  for (let i = stack.length - 1; i > 0; i--) if (stack[i].onLeave) stack[i].onLeave();
+  stack = [stack[0], { title:'Now Playing', now:true, mode:'progress' }];
+  render();
+}
+
 function pushNow(){
   if (top() && top().now) return render();
   push({ title:'Now Playing', now:true, mode:'progress' });
@@ -1234,32 +1302,66 @@ let drag = null;
 const angleAt = e => { const r = wheel.getBoundingClientRect();
   return Math.atan2(e.clientY - (r.top + r.height/2), e.clientX - (r.left + r.width/2)) * 180 / Math.PI; };
 
+const buttonAt = a => a > -135 && a < -45 ? 'menu' : a >= 45 && a <= 135 ? 'play' : a > -45 && a < 45 ? 'next' : 'prev';
+
+/* Holding a button runs its hold action (set in Settings › Hold Buttons). Seek actions repeat while held. */
+function startHold(holder, btn){
+  holder.holdTimer = setTimeout(() => {
+    if (holder.cancelled || holder.moved >= 8) return;
+    const action = holdActionFor(btn);
+    if (action === 'none') return;
+    holder.held = true;
+    runHoldAction(action);
+    if (HOLD_ACTIONS[action] && HOLD_ACTIONS[action].repeat)
+      holder.repeat = setInterval(() => runHoldAction(action), 650);
+  }, HOLD_MS);
+}
+function endHold(holder){ clearTimeout(holder.holdTimer); clearInterval(holder.repeat); holder.cancelled = true; }
+
 wheel.addEventListener('pointerdown', e => {
   if (e.target.closest('#center')) return;
-  wheel.setPointerCapture(e.pointerId);
+  try { wheel.setPointerCapture(e.pointerId); } catch {}
   drag = { last: angleAt(e), acc:0, moved:0, start: angleAt(e), t: performance.now() };
+  startHold(drag, buttonAt(drag.start));
 });
 wheel.addEventListener('pointermove', e => {
   if (!drag) return;
   const a = angleAt(e);
   let d = a - drag.last; if (d > 180) d -= 360; if (d < -180) d += 360;
   drag.last = a; drag.acc += d; drag.moved += Math.abs(d);
+  if (drag.moved >= 8) endHold(drag);
   while (drag.acc >= STEP) { drag.acc -= STEP; scroll(1); }
   while (drag.acc <= -STEP) { drag.acc += STEP; scroll(-1); }
 });
 const endDrag = e => {
   if (!drag) return;
+  endHold(drag);
+  if (drag.held) { drag = null; return; }       // the hold already acted
   const tap = drag.moved < 8;
-  const a = drag.start; drag = null;
+  const btn = buttonAt(drag.start); drag = null;
   if (!tap || e.type === 'pointercancel') return;
-  if (a > -135 && a < -45) back();
-  else if (a >= 45 && a <= 135) togglePlay();
-  else if (a > -45 && a < 45) nextTrack();
+  if (btn === 'menu') back();
+  else if (btn === 'play') togglePlay();
+  else if (btn === 'next') nextTrack();
   else prevTrack();
 };
 wheel.addEventListener('pointerup', endDrag);
 wheel.addEventListener('pointercancel', endDrag);
-$('#center').addEventListener('click', select);
+
+/* Centre button: tap = select, hold = its hold action */
+let centerPress = null;
+const centerEl = $('#center');
+centerEl.addEventListener('pointerdown', e => {
+  try { centerEl.setPointerCapture(e.pointerId); } catch {}
+  centerPress = { moved:0 };
+  startHold(centerPress, 'center');
+});
+centerEl.addEventListener('pointerup', () => {
+  if (!centerPress) return;
+  const p = centerPress; centerPress = null; endHold(p);
+  if (!p.held) select();
+});
+centerEl.addEventListener('pointercancel', () => { if (centerPress) { endHold(centerPress); centerPress = null; } });
 
 let wheelAcc = 0;
 $('#pod').addEventListener('wheel', e => {
@@ -1288,6 +1390,7 @@ document.addEventListener('keydown', e => {
   if (k === 'ArrowDown') scroll(1);
   else if (k === 'ArrowUp') scroll(-1);
   else if (k === 'Enter') select();
+  else if (k === 'Escape' && e.repeat) { if (!escHeld) { escHeld = true; runHoldAction(holdActionFor('menu')); } }   // hold Esc = hold MENU
   else if (k === 'Escape' || k === 'Backspace') back();
   else if (k === ' ') togglePlay();
   else if (k === 'ArrowRight') nextTrack();
