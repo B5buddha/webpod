@@ -643,32 +643,35 @@ function settingsMenu(){
       { label:'Clicker', value: settings.clicker ? 'On' : 'Off', onSelect:() => { settings.clicker = !settings.clicker; saveSettings(); render(); } },
       { label:'Faceplate', value: (FACES.find(f => f.id === settings.face) || FACES[0]).name, onSelect:() => push(facesMenu()) },
       { label:'Hold Buttons', chevron:true, onSelect:() => push(holdButtonsMenu()) },
-      { label:'Version', value:APP_VERSION, onSelect:() => push(versionMenu()) },
       { label:'Night Mode', value: { off:'Off', on:'On', auto:'Auto' }[settings.night] || 'Off', onSelect:() => {
           settings.night = { off:'on', on:'auto', auto:'off' }[settings.night] || 'on';
           saveSettings(); applyNight(); render();
           if (settings.night === 'auto') toast('Auto follows your phone’s Light/Dark setting');
         } },
     ];
-    if (auth.loggedIn) {
-      items.push({ label:'About', chevron:true, onSelect:() => push(aboutMenu()) });
-      items.push({ label:'Sign Out', onSelect:logout });
-    }
+    items.push({ label:'About', chevron:true, onSelect:() => push(aboutMenu()) });
+    if (auth.loggedIn) items.push({ label:'Sign Out', onSelect:logout });
     return items;
   }};
 }
 
+const APP_CREATOR = 'B5buddha';
 function aboutMenu(){
-  const m = { title:'About', index:0, topRow:0, items:[{ label:'Loading…', dim:true }] };
-  api('/me').then(me => {
-    m.items = [
-      { label:'Name', value: me.display_name || me.id },
+  const head = [
+    { label:'Version', value:APP_VERSION, onSelect:() => push(versionMenu()) },
+    { label:'Created by', value:APP_CREATOR },
+  ];
+  const m = { title:'About', index:0, topRow:0,
+    items: auth.loggedIn ? [...head, { label:'Loading account…', dim:true }] : head };
+  if (auth.loggedIn) api('/me').then(me => {
+    m.items = [...head,
+      { label:'Spotify', value: me.display_name || me.id },
       { label:'Plan', value: me.product === 'premium' ? 'Premium' : (me.product || '?') },
       { label:'Country', value: me.country || '—' },
       { label:'Mode', value: drmOk ? 'Player + Remote' : 'Remote' },
     ];
     render();
-  }).catch(e => { m.items = [{ label:e.message, dim:true }]; render(); });
+  }).catch(e => { m.items = [...head, { label:e.message, dim:true }]; render(); });
   return m;
 }
 
@@ -1215,8 +1218,13 @@ function toast(msg){
 /* ================= Version & updates =================
    Bump APP_VERSION here AND in version.json for every release. The Home Screen app checks
    version.json (never cached) on launch; if it's newer than this copy, it reloads the new one. */
-const APP_VERSION = '0.0.1';
+const APP_VERSION = '0.0.2';
 const CHANGELOG = [
+  { v:'0.0.2', notes:[
+    'Version moved into About',
+    'About shows who made Web Pod',
+    'About works before signing in',
+  ]},
   { v:'0.0.1', notes:[
     'First numbered version',
     'Click wheel, menus & Now Playing',
