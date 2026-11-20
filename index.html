@@ -579,23 +579,34 @@ async function pickDevice(){
   return phone ? phone.id : null;
 }
 
+/* To save requests, play straight to the device you last used (or the one already playing);
+   only ask Spotify for the device list if that doesn't work. */
 async function playBody(body){
   activate();
   try {
     if (drmOk) { try { await initPlayer(); } catch {} }
-    const target = await pickDevice();
-    if (!target) return toast(NO_DEVICE_MSG);
-    try { await api('/me/player/play?device_id=' + target, { method:'PUT', body:JSON.stringify(body) }); }
+    let target = (ps && ps.device && ps.device.id) || store.get('pod_device') || store.get('pod_last_device') || null;
+    const play = id => api('/me/player/play' + (id ? '?device_id=' + id : ''), { method:'PUT', body:JSON.stringify(body) });
+    try { await play(target); }
     catch (e) {
       if (e.status !== 404 && e.status !== 502) throw e;
-      await api('/me/player', { method:'PUT', body:JSON.stringify({ device_ids:[target], play:false }) });
-      await new Promise(r => setTimeout(r, 500));
-      await api('/me/player/play?device_id=' + target, { method:'PUT', body:JSON.stringify(body) });
+      target = await pickDevice();                       // last device is gone: look it up
+      if (!target) return toast(NO_DEVICE_MSG);
+      try { await play(target); }
+      catch (e2) {
+        if (e2.status !== 404 && e2.status !== 502) throw e2;
+        await api('/me/player', { method:'PUT', body:JSON.stringify({ device_ids:[target], play:false }) });
+        await new Promise(r => setTimeout(r, 500));
+        await play(target);
+      }
     }
+    if (target) store.set('pod_last_device', target);
     pushNow();
-    setTimeout(poll, 600);
+    setTimeout(poll, 800);
   } catch (e) {
-    toast(e.status === 404 ? NO_DEVICE_MSG : e.status === 403 ? 'Playback refused (Premium required?)' : 'Could not play: ' + e.message);
+    toast(e.status === 404 ? NO_DEVICE_MSG : e.status === 403 ? 'Playback refused (Premium required?)'
+      : e.status === 429 ? 'Spotify is limiting playback right now. Close other Web Pod windows, then wait a few minutes.'
+      : 'Could not play: ' + e.message);
   }
 }
 
@@ -1520,8 +1531,13 @@ function toast(msg){
 /* ================= Version & updates =================
    Bump APP_VERSION here AND in version.json for every release. The Home Screen app checks
    version.json (never cached) on launch; if it's newer than this copy, it reloads the new one. */
-const APP_VERSION = '0.0.10';
+const APP_VERSION = '0.0.11';
 const CHANGELOG = [
+  { v:'0.0.11', notes:[
+    'Fewer Spotify requests when playing',
+    'Remembers your last device',
+    'Clearer message when Spotify limits',
+  ]},
   { v:'0.0.10', notes:[
     'Fixed "too many requests" errors',
     'Waits politely when Spotify is busy',
