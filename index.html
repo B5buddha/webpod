@@ -169,6 +169,30 @@
   body.fs.wide .pod { grid-template-rows:100%; grid-template-columns:1fr 1fr; }
   body.fs .wheel { margin:0; }
   body.fs:not(.wide) .bezelwrap { align-self:start; }
+
+  /* ---------- Add to Home Screen ---------- */
+  .a2hs-btn {
+    position:fixed; z-index:20; right:calc(env(safe-area-inset-right) + 14px); bottom:calc(env(safe-area-inset-bottom) + 14px);
+    display:flex; align-items:center; gap:7px; padding:10px 14px 10px 12px; border:0; border-radius:999px;
+    background:rgba(255,255,255,.14); color:#fff; font:600 14px -apple-system, "Segoe UI", sans-serif;
+    -webkit-backdrop-filter:blur(12px); backdrop-filter:blur(12px); box-shadow:0 4px 14px rgba(0,0,0,.35); cursor:pointer;
+  }
+  .pod.silver ~ .a2hs-btn, body:has(.pod.silver) .a2hs-btn { background:rgba(0,0,0,.55); }
+  .a2hs-btn svg { width:18px; height:18px; }
+  .a2hs { position:fixed; inset:0; z-index:30; background:rgba(0,0,0,.6); display:flex; align-items:flex-end; justify-content:center;
+    padding:16px 16px calc(env(safe-area-inset-bottom) + 16px); }
+  .a2hs-card { width:100%; max-width:420px; background:#1c1d21; color:#f1f3f4; border-radius:20px; padding:22px 20px 18px;
+    font:15px/1.45 -apple-system, "Segoe UI", sans-serif; box-shadow:0 20px 50px rgba(0,0,0,.6); }
+  .a2hs-card h2 { margin:0 0 4px; font-size:19px; }
+  .a2hs-card p { margin:0 0 14px; color:#a8adb3; font-size:14px; }
+  .a2hs-card ol { margin:0 0 16px; padding-left:0; list-style:none; counter-reset:s; }
+  .a2hs-card li { counter-increment:s; display:flex; gap:12px; align-items:center; padding:9px 0; border-top:1px solid rgba(255,255,255,.08); }
+  .a2hs-card li::before { content:counter(s); flex:none; width:26px; height:26px; border-radius:50%; background:#2f6fe0; color:#fff;
+    display:flex; align-items:center; justify-content:center; font-weight:700; font-size:13px; }
+  .a2hs-card li svg { width:18px; height:18px; vertical-align:-3px; margin:0 2px; }
+  .a2hs-card button { width:100%; padding:13px; border:0; border-radius:12px; font:600 15px -apple-system, "Segoe UI", sans-serif; cursor:pointer; }
+  .a2hs-card .primary { background:#2f6fe0; color:#fff; margin-bottom:8px; }
+  .a2hs-card .secondary { background:rgba(255,255,255,.08); color:#f1f3f4; }
 </style>
 </head>
 <body>
@@ -194,6 +218,24 @@
     <div class="center" id="center"></div>
   </div>
 </div>
+</div>
+
+<button class="a2hs-btn hidden" id="a2hsBtn" aria-label="Add to Home Screen">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 8l5-5 5 5"/><path d="M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7"/></svg>
+  Add to Home Screen
+</button>
+<div class="a2hs hidden" id="a2hs" role="dialog" aria-modal="true" aria-labelledby="a2hsTitle">
+  <div class="a2hs-card">
+    <h2 id="a2hsTitle">Put Web Pod on your Home Screen</h2>
+    <p>It then opens full screen, with no Safari bars.</p>
+    <ol>
+      <li><span>Tap <b>Share</b> <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 8l5-5 5 5"/><path d="M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7"/></svg> below, or in Safari’s toolbar (it may be under <b>•••</b>)</span></li>
+      <li><span>Scroll down and tap <b>Add to Home Screen</b></span></li>
+      <li><span>Make sure <b>Open as Web App</b> is on, then tap <b>Add</b></span></li>
+    </ol>
+    <button class="primary" id="a2hsShare">Share</button>
+    <button class="secondary" id="a2hsClose">Close</button>
+  </div>
 </div>
 
 <div class="panel" id="panel">
@@ -491,6 +533,7 @@ function mainMenu(){
     const items = [
       { label:'Music', chevron:true, onSelect:() => push(musicMenu()) },
       { label:'Shuffle Songs', onSelect:shuffleSongs },
+      ...(canInstall() ? [{ label:'Add to Home Screen', onSelect:openA2hs }] : []),
       { label:'Devices', chevron:true, onSelect:() => push(devicesMenu()) },
       { label:'Settings', chevron:true, onSelect:() => push(settingsMenu()) },
     ];
@@ -887,6 +930,7 @@ $('#pod').addEventListener('wheel', e => {
 
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
+  if (!$('#a2hs').classList.contains('hidden')) { if (e.key === 'Escape') closeA2hs(); return; }
   const k = e.key;
   if (k === 'ArrowDown') scroll(1);
   else if (k === 'ArrowUp') scroll(-1);
@@ -904,6 +948,29 @@ document.addEventListener('keydown', e => {
    Desktop: the classic device on a backdrop, next to the setup panel.
    Phones / foldables / home-screen app: the device fills the whole screen. */
 const FORCE_FS = new URLSearchParams(location.search).has('fs');
+
+/* ---- Add to Home Screen ----
+   Websites can't add themselves to the Home Screen on iOS, so this opens a short guide
+   plus the share sheet, where "Add to Home Screen" lives. */
+const isStandalone = () => navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
+const isTouch = () => matchMedia('(pointer: coarse)').matches;
+const canInstall = () => !isStandalone() && (isTouch() || FORCE_FS);
+function openA2hs(){ $('#a2hs').classList.remove('hidden'); $('#a2hsShare').focus(); }
+function closeA2hs(){ $('#a2hs').classList.add('hidden'); }
+function syncA2hs(){ $('#a2hsBtn').classList.toggle('hidden', !canInstall()); }
+$('#a2hsBtn').addEventListener('click', openA2hs);
+$('#a2hsClose').addEventListener('click', closeA2hs);
+$('#a2hs').addEventListener('click', e => { if (e.target.id === 'a2hs') closeA2hs(); });
+$('#a2hsShare').addEventListener('click', async () => {
+  if (navigator.share) {
+    try { await navigator.share({ title:'Web Pod', url: REDIRECT }); } catch {}
+  } else {
+    try { await navigator.clipboard.writeText(REDIRECT); } catch {}
+    toast('Use the Share button in Safari’s toolbar');
+  }
+});
+matchMedia('(display-mode: standalone)').addEventListener?.('change', () => { syncA2hs(); render(); });
+syncA2hs();
 const BEZEL_W = 292, BEZEL_H = 222;
 function wantsFullscreen(){
   if (!auth.loggedIn) return false;
