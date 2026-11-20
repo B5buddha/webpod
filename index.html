@@ -94,6 +94,16 @@
   .side .ph { position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
     background: linear-gradient(160deg,#4b5563,#111827); color:rgba(255,255,255,.75); font-size:44px; }
   .side img { width:100%; height:100%; object-fit:cover; display:block; animation: kb 12s ease-in-out infinite alternate; }
+  /* Song lists: cover on top, details below */
+  .side .sinfo { position:absolute; inset:0; display:flex; flex-direction:column; background:linear-gradient(#1b1d22,#0c0d10); }
+  .side .sart { position:relative; flex:none; aspect-ratio:1/1; width:100%; max-height:72%; overflow:hidden; background:#222; }
+  .side .sart img { animation:none; }
+  .side .sart .ph { font-size:36px; }
+  .side .smeta { flex:1; min-height:0; padding:4px 6px 0; display:flex; flex-direction:column; justify-content:center; gap:1px; color:#fff; }
+  .side .smeta div { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; line-height:1.25; }
+  .side .st1 { font-size:11px; font-weight:700; }
+  .side .st2 { font-size:10px; color:#d5d8dd; }
+  .side .st3 { font-size:10px; color:#9aa0a8; }
   @keyframes kb { from { transform:scale(1.05) translate(-3%,0) } to { transform:scale(1.2) translate(3%,-2%) } }
 
   /* Now playing */
@@ -762,8 +772,18 @@ function paged(title, url, opts){
   return m;
 }
 
+/* Song details for the right-hand panel: album cover on top, song / artist / album below */
+function songInfo(t, album){
+  const al = t.album || album;
+  return { title:t.name, artist:artistsOf(t) || (album && artistsOf(album)) || '', album:(al && al.name) || '' };
+}
+function episodeInfo(e, show){
+  const sh = e.show || show;
+  const date = e.release_date ? new Date(e.release_date + 'T00:00:00').toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' }) : '';
+  return { title:e.name, artist:(sh && sh.name) || '', album:date };
+}
 function trackItem(t, idx, m, play){
-  return { label:t.name, image: imgOf(t.album) || m.image, onSelect:() => play(idx) };
+  return { label:t.name, image: imgOf(t.album) || m.image, info: songInfo(t), onSelect:() => play(idx) };
 }
 
 function playlistsMenu(){
@@ -771,7 +791,7 @@ function playlistsMenu(){
     map: p => ({ label:p.name, chevron:true, image:imgOf(p), onSelect:() => push(playlistTracks(p)) }) });
 }
 function playlistTracks(p){
-  const m = paged(p.name, `/playlists/${p.id}/tracks?limit=50`, {
+  const m = paged(p.name, `/playlists/${p.id}/tracks?limit=50`, { split:true,
     fallback: `/playlists/${p.id}/items?limit=50`,
     head: [{ label:'▶ Play Playlist', onSelect:() => playBody({ context_uri:p.uri }) }],
     privateMsg: 'Spotify hides this list from apps',
@@ -786,8 +806,8 @@ function albumsMenu(){
 }
 function albumTracks(a){
   const img = imgOf(a);
-  const m = paged(a.name, `/albums/${a.id}/tracks?limit=50`, {
-    map: (t, i, m) => ({ label:t.name, image:img, onSelect:() => playBody({ context_uri:a.uri, offset:{ uri:m.raw[i].uri } }) }) });
+  const m = paged(a.name, `/albums/${a.id}/tracks?limit=50`, { split:true,
+    map: (t, i, m) => ({ label:t.name, image:img, info:songInfo(t, a), onSelect:() => playBody({ context_uri:a.uri, offset:{ uri:m.raw[i].uri } }) }) });
   m.image = img;
   return m;
 }
@@ -806,11 +826,11 @@ function playUris(m, idx){
   playBody({ uris, offset:{ position: idx - start } });
 }
 function likedMenu(){
-  return paged('Songs', '/me/tracks?limit=50', { pick: it => it.track && !it.track.is_local ? it.track : null,
+  return paged('Songs', '/me/tracks?limit=50', { split:true, pick: it => it.track && !it.track.is_local ? it.track : null,
     map: (t, i, m) => trackItem(t, i, m, idx => playUris(m, idx)) });
 }
 function simpleTracks(title, url, pick){
-  return paged(title, url, { pick: it => { const t = pick(it); return t && t.uri ? t : null; },
+  return paged(title, url, { split:true, pick: it => { const t = pick(it); return t && t.uri ? t : null; },
     map: (t, i, m) => trackItem(t, i, m, idx => playUris(m, idx)) });
 }
 
@@ -872,7 +892,7 @@ function showsMenu(){
 }
 function showEpisodes(s){
   return paged(s.name, `/shows/${s.id}/episodes?limit=50`, { split:true,
-    map: e => ({ label:e.name, image:imgOf(e) || imgOf(s), onSelect:() => playBody({ uris:[e.uri] }) }) });
+    map: e => ({ label:e.name, image:imgOf(e) || imgOf(s), info:episodeInfo(e, s), onSelect:() => playBody({ uris:[e.uri] }) }) });
 }
 
 /* ================= Search ================= */
@@ -1000,12 +1020,12 @@ function searchCategory(q, type, title, ex){
   const url = `/search?q=${encodeURIComponent(q)}&type=${type}&limit=10`;
   const base = { split:true, extract: d => (d && ex(d)) || { items:[] } };
   const maps = {
-    track:    (t, i, m) => ({ label:t.name + ' – ' + artistsOf(t), image:artOf(t), onSelect:() => playUris(m, i) }),
+    track:    (t, i, m) => ({ label:t.name, image:artOf(t), info:songInfo(t), onSelect:() => playUris(m, i) }),
     artist:   a => ({ label:a.name, chevron:true, image:imgOf(a), onSelect:() => push(artistAlbums(a)) }),
     album:    a => ({ label:a.name + ' – ' + artistsOf(a), chevron:true, image:imgOf(a), onSelect:() => push(albumTracks(a)) }),
     playlist: p => ({ label:p.name, chevron:true, image:imgOf(p), onSelect:() => push(playlistTracks(p)) }),
     show:     s => ({ label:s.name, chevron:true, image:imgOf(s), onSelect:() => push(showEpisodes(s)) }),
-    episode:  e => ({ label:e.name, image:imgOf(e), onSelect:() => playBody({ uris:[e.uri] }) }),
+    episode:  e => ({ label:e.name, image:imgOf(e), info:episodeInfo(e), onSelect:() => playBody({ uris:[e.uri] }) }),
   };
   return paged(title, url, { ...base, pick: x => x && x.uri ? x : null, map: maps[type] });
 }
@@ -1135,9 +1155,19 @@ function render(){
     const sel = items[m.index];
     const t = curTrack();
     const src = (sel && sel.image) || artOf(t) || null;
-    if (src !== sideKey) {
-      sideKey = src;
-      side.innerHTML = src ? `<img src="${esc(src)}" alt="">` : '<div class="ph">♪</div>';
+    const info = sel && sel.info;
+    const key = src + '|' + (info ? info.title + info.artist + info.album : '');
+    if (key !== sideKey) {
+      sideKey = key;
+      if (info) {
+        // Song lists: album cover on top, song details underneath
+        side.innerHTML = `<div class="sinfo">
+          <div class="sart">${src ? `<img src="${esc(src)}" alt="">` : '<div class="ph">♪</div>'}</div>
+          <div class="smeta"><div class="st1">${esc(info.title)}</div><div class="st2">${esc(info.artist)}</div><div class="st3">${esc(info.album)}</div></div>
+        </div>`;
+      } else {
+        side.innerHTML = src ? `<img src="${esc(src)}" alt="">` : '<div class="ph">♪</div>';
+      }
     }
   }
   if (m.next && !m.loading && m.index >= items.length - 6) m.loadMore();
@@ -1241,8 +1271,13 @@ function toast(msg){
 /* ================= Version & updates =================
    Bump APP_VERSION here AND in version.json for every release. The Home Screen app checks
    version.json (never cached) on launch; if it's newer than this copy, it reloads the new one. */
-const APP_VERSION = '0.0.6';
+const APP_VERSION = '0.0.7';
 const CHANGELOG = [
+  { v:'0.0.7', notes:[
+    'Album cover while picking songs',
+    'Song, artist & album shown too',
+    'Works in playlists, albums & search',
+  ]},
   { v:'0.0.6', notes:[
     'Wheel sized to match the screen',
     'Better fit when the phone is open',
