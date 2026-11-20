@@ -475,16 +475,37 @@ function logout(){
   stack = [mainMenu()]; render(); syncPanel();
 }
 
+/* Spotify limits how often an app may call it, separately for each kind of request.
+   When it answers 429 ("too many requests") for one kind (say "what's playing"), only that kind
+   pauses until the wait is over; the wait grows if it keeps happening. Search etc. keep working. */
+const limits = new Map();   // endpoint → { until, strikes }
+const endpointOf = path => (path.startsWith('http') ? new URL(path).pathname.replace('/v1', '') : path.split('?')[0]);
+const isRateLimited = (ep = '/me/player') => Date.now() < ((limits.get(ep) || {}).until || 0);
+const busyError = until => {
+  const e = new Error('Spotify is busy. Try again in ' + Math.max(1, Math.ceil((until - Date.now()) / 1000)) + 's');
+  e.status = 429; return e;
+};
 async function api(path, opts = {}, retried = false){
+  const ep = endpointOf(path), lim = limits.get(ep) || { until:0, strikes:0 };
+  const wait = lim.until - Date.now();
+  if (wait > 0) {
+    if (wait > 6000) throw busyError(lim.until);   // long wait: tell the user instead of hanging
+    await new Promise(res => setTimeout(res, wait));
+  }
   const url = path.startsWith('http') ? path : 'https://api.spotify.com/v1' + path;
   const token = await getToken();
   const r = await fetch(url, { ...opts, headers:{ Authorization:'Bearer ' + token,
     ...(opts.body ? { 'Content-Type':'application/json' } : {}) } });
   if (r.status === 401 && !retried) { await refresh(); return api(path, opts, true); }
-  if (r.status === 429 && !retried) {
-    await new Promise(res => setTimeout(res, (Number(r.headers.get('Retry-After')) || 1) * 1000));
-    return api(path, opts, true);
+  if (r.status === 429) {
+    lim.strikes++;
+    const secs = Number(r.headers.get('Retry-After')) || Math.min(60, 4 * 2 ** (lim.strikes - 1));   // 4s, 8s, 16s… max 60s
+    lim.until = Date.now() + secs * 1000;
+    limits.set(ep, lim);
+    if (!retried && secs <= 6) return api(path, opts, true);
+    throw busyError(lim.until);
   }
+  if (r.ok && lim.strikes) limits.delete(ep);
   if (r.status === 204 || r.status === 202) return null;
   const text = await r.text();
   let data = null; try { data = text ? JSON.parse(text) : null; } catch {}
@@ -599,8 +620,23 @@ async function poll(){
     if ((curTrack() && curTrack().uri) !== prevUri || (ps && ps.paused) !== wasPaused || !top().now) render();
   } catch {} finally { polling = false; }
 }
-setInterval(() => { if (document.visibilityState === 'visible') poll(); }, 2000);
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') poll(); });
+/* Check what's playing: often only while Now Playing is on screen, rarely otherwise
+   (Spotify limits requests, and every open copy of Web Pod shares the same limit). */
+let pollTimer = null;
+function schedulePoll(){
+  clearTimeout(pollTimer);
+  const visible = document.visibilityState === 'visible';
+  const delay = !visible ? 30000 : (top() && top().now ? 4000 : 15000);
+  pollTimer = setTimeout(async () => {
+    if (document.visibilityState === 'visible' && !isRateLimited()) await poll();
+    schedulePoll();
+  }, delay);
+}
+setTimeout(schedulePoll, 1000);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && !isRateLimited()) poll();
+  schedulePoll();
+});
 
 async function remoteCmd(method, path){
   try { await api('/me/player' + path, { method }); }
@@ -999,10 +1035,12 @@ function typeKey(m, key){
 function queueLiveSearch(m){
   clearTimeout(m.timer);
   const q = m.q.trim();
-  if (!q) { m.results = null; m.loading = false; return; }
+  if (q.length < 2) { m.results = null; m.loading = false; return; }   // one letter isn't worth a search
+  if (searchCache.has(q.toLowerCase())) { m.req++; m.results = searchCache.get(q.toLowerCase()); m.loading = false; return; }
   m.loading = true;
-  m.timer = setTimeout(() => liveSearch(m, q), 450);
+  m.timer = setTimeout(() => liveSearch(m, q), 800);   // wait until typing pauses
 }
+const searchCache = new Map();   // results for searches already done this session
 async function liveSearch(m, q){
   const req = ++m.req;
   const types = SEARCH_TYPES.map(t => t[0]).join(',');
@@ -1036,6 +1074,7 @@ async function liveSearch(m, q){
     }
     if (items.length) items.push({ label:'All Results', chevron:true, onSelect:() => runSearch(q) });
     m.results = items.length ? items : [{ label:'No results', dim:true }];
+    searchCache.set(q.toLowerCase(), m.results);
   } catch (e) {
     if (req !== m.req) return;
     m.results = [{ label:e.message, dim:true }];
@@ -1301,12 +1340,13 @@ function goNowPlaying(){
   if (top().now) return;
   for (let i = stack.length - 1; i > 0; i--) if (stack[i].onLeave) stack[i].onLeave();
   stack = [stack[0], { title:'Now Playing', now:true, mode:'progress' }];
-  render();
+  render(); schedulePoll();
 }
 
 function pushNow(){
   if (top() && top().now) return render();
   push({ title:'Now Playing', now:true, mode:'progress' });
+  schedulePoll();   // check more often while Now Playing is showing
 }
 
 /* ================= Rendering ================= */
@@ -1480,8 +1520,14 @@ function toast(msg){
 /* ================= Version & updates =================
    Bump APP_VERSION here AND in version.json for every release. The Home Screen app checks
    version.json (never cached) on launch; if it's newer than this copy, it reloads the new one. */
-const APP_VERSION = '0.0.9';
+const APP_VERSION = '0.0.10';
 const CHANGELOG = [
+  { v:'0.0.10', notes:[
+    'Fixed "too many requests" errors',
+    'Waits politely when Spotify is busy',
+    'Checks Spotify far less often',
+    'Lighter live search',
+  ]},
   { v:'0.0.9', notes:[
     'YouTube: search & watch videos',
     'Video plays on the iPod screen',
