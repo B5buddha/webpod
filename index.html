@@ -98,14 +98,30 @@
 
   /* Search */
   .searchview { position:absolute; inset:0; display:flex; flex-direction:column; }
-  .sform { display:flex; align-items:center; gap:5px; margin:5px 6px 4px; height:24px; padding:0 8px; border-radius:12px;
-    background:#fff; border:1px solid #9aa0a6; box-shadow: inset 0 1px 2px rgba(0,0,0,.15); color:#666; }
-  .sform.sel { border-color:#2876dc; box-shadow: 0 0 0 2px rgba(58,142,240,.45); }
-  .sform svg { width:12px; height:12px; flex:none; }
-  .sform input { flex:1; min-width:0; border:0; outline:0; background:transparent; font:700 13px "Helvetica Neue", Helvetica, Arial, sans-serif;
-    color:#000; padding:0; -webkit-appearance:none; appearance:none; }
-  .sform input::-webkit-search-decoration, .sform input::-webkit-search-cancel-button { -webkit-appearance:none; }
-  .srows { flex:1; overflow:hidden; }
+  .sq { display:flex; align-items:center; gap:5px; margin:4px 6px 2px; height:22px; padding:0 8px; border-radius:11px; flex:none;
+    background:#fff; border:1px solid #9aa0a6; box-shadow: inset 0 1px 2px rgba(0,0,0,.15); color:#000;
+    font:700 13px "Helvetica Neue", Helvetica, Arial, sans-serif; white-space:nowrap; overflow:hidden; }
+  .sq svg { width:12px; height:12px; flex:none; color:#666; }
+  .sq .txt { overflow:hidden; text-overflow:ellipsis; }
+  .sq .ph { color:#999; font-weight:400; }
+  .sq .caret { display:inline-block; width:1.5px; height:14px; background:#2876dc; margin-left:1px; vertical-align:-2px; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity:0; } }
+  .srows { flex:1; overflow:hidden; position:relative; }
+  .row.hv { padding-right:64px; }
+  .row .tag { position:absolute; right:6px; top:0; font-weight:400; font-size:11px; color:#888; }
+  .row.sel .tag { color:#e6f0ff; }
+  /* Letter strip: turn the wheel to choose, press the centre to type (like the classic iPod) */
+  .kstrip { flex:none; height:34px; position:relative; overflow:hidden; border-top:1px solid #9aa0a6;
+    background:linear-gradient(#fafbfc,#dadde1); touch-action:manipulation; }
+  .kstrip .track { position:absolute; top:5px; left:0; display:flex; transition: transform .12s ease-out; }
+  .kstrip .k { width:21px; height:24px; line-height:24px; text-align:center; flex:none; border-radius:4px; cursor:pointer;
+    font:700 14px "Helvetica Neue", Helvetica, Arial, sans-serif; color:#3a3d42; }
+  .kstrip .k.sp { font-size:13px; color:#2876dc; }
+  .kstrip .k.on { background:linear-gradient(#7cc0ff,#3a8ef0 55%,#2876dc); color:#fff; box-shadow:0 1px 2px rgba(0,0,0,.3); }
+  .kstrip.off .k.on { background:#c4c9cf; color:#fff; box-shadow:none; }
+  .kstrip::before, .kstrip::after { content:""; position:absolute; top:0; bottom:0; width:26px; z-index:1; pointer-events:none; }
+  .kstrip::before { left:0; background:linear-gradient(90deg,#e8eaed,rgba(232,234,237,0)); }
+  .kstrip::after { right:0; background:linear-gradient(270deg,#e8eaed,rgba(232,234,237,0)); }
 
   .toast { position:absolute; left:8px; right:8px; bottom:8px; background:rgba(0,0,0,.82); color:#fff; font-size:11px;
     padding:6px 8px; border-radius:6px; z-index:5; opacity:0; transition:opacity .2s; pointer-events:none; }
@@ -787,13 +803,91 @@ const recentSearches = () => { try { return JSON.parse(store.get(RECENT_KEY) || 
 function saveRecent(q){
   store.set(RECENT_KEY, JSON.stringify([q, ...recentSearches().filter(x => x.toLowerCase() !== q.toLowerCase())].slice(0, 8)));
 }
+/* The built-in keyboard: a strip of characters along the bottom of the screen.
+   Keys mode:    wheel moves along the strip, centre types the highlighted key.
+   Results mode: wheel moves through the live results, centre opens/plays one, MENU returns to the keys. */
+const KEY_RESULTS = '▲', KEY_DEL = '⌫', KEY_SPACE = '␣';
+const KEYS = [KEY_RESULTS, KEY_DEL, KEY_SPACE, ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'];
+const KEY_START = KEYS.indexOf('A');
+const RESULT_TAGS = { track:'Song', artist:'Artist', album:'Album', playlist:'Playlist', show:'Podcast', episode:'Episode' };
+const RESULTS_PER_TYPE = { track:4, artist:2, album:2, playlist:2, show:2, episode:2 };
+
 function searchMenu(){
-  return { title:'Search', search:true, index:-1, topRow:0, build(){
+  const m = { title:'Search', search:true, q:'', cursor:KEY_START, mode:'keys', index:0, topRow:0,
+    results:null, loading:false, req:0, timer:null };
+  m.build = () => {
+    if (m.q.trim()) {
+      if (m.loading && !m.results) return [{ label:'Searching…', dim:true }];
+      return m.results || [];
+    }
     const r = recentSearches();
-    const items = r.map(q => ({ label:q, onSelect:() => runSearch(q) }));
-    if (r.length) items.push({ label:'Clear Recent Searches', onSelect:() => { store.del(RECENT_KEY); top().index = -1; render(); } });
+    if (!r.length) return [{ label:'Turn the wheel to pick letters', dim:true }];
+    const items = r.map(q => ({ label:q, tag:'Recent', onSelect:() => runSearch(q) }));
+    items.push({ label:'Clear Recent Searches', onSelect:() => { store.del(RECENT_KEY); m.mode = 'keys'; render(); } });
     return items;
-  }};
+  };
+  return m;
+}
+function typeKey(m, key){
+  if (key === KEY_RESULTS) {
+    const items = itemsOf(m).filter(it => !it.dim);
+    if (!items.length) return toast(m.q ? 'No results yet' : 'Type something first');
+    m.mode = 'results'; m.index = itemsOf(m).findIndex(it => !it.dim); m.topRow = 0;
+    return render();
+  }
+  if (key === KEY_DEL) m.q = m.q.slice(0, -1);
+  else if (key === KEY_SPACE) { if (m.q && !m.q.endsWith(' ')) m.q += ' '; }
+  else if (m.q.length < 60) m.q += key.length === 1 ? key.toLowerCase() : key;
+  queueLiveSearch(m);
+  render();
+}
+function queueLiveSearch(m){
+  clearTimeout(m.timer);
+  const q = m.q.trim();
+  if (!q) { m.results = null; m.loading = false; return; }
+  m.loading = true;
+  m.timer = setTimeout(() => liveSearch(m, q), 450);
+}
+async function liveSearch(m, q){
+  const req = ++m.req;
+  const types = SEARCH_TYPES.map(t => t[0]).join(',');
+  try {
+    let d;
+    try { d = await api(`/search?q=${encodeURIComponent(q)}&type=${types}&limit=5`); }
+    catch (e) { if (e.status !== 400) throw e; d = await api(`/search?q=${encodeURIComponent(q)}&type=${types}&limit=3`); }
+    if (req !== m.req) return;                         // a newer search has started
+    const items = [], songs = [];
+    for (const [type, , ex] of SEARCH_TYPES) {
+      const list = ((d && ex(d) && ex(d).items) || []).filter(x => x && x.uri).slice(0, RESULTS_PER_TYPE[type]);
+      for (const x of list) {
+        const it = { label: type === 'track' || type === 'album' ? `${x.name} – ${artistsOf(x)}` : x.name,
+          tag: RESULT_TAGS[type], image: artOf(x) };
+        if (type === 'track') {
+          const i = songs.push(x) - 1;
+          it.onSelect = () => { saveRecent(q); playBody({ uris: songs.map(s => s.uri), offset:{ position:i } }); };
+        } else {
+          it.chevron = type !== 'episode';
+          it.onSelect = () => {
+            saveRecent(q);
+            if (type === 'artist') push(artistAlbums(x));
+            else if (type === 'album') push(albumTracks(x));
+            else if (type === 'playlist') push(playlistTracks(x));
+            else if (type === 'show') push(showEpisodes(x));
+            else playBody({ uris:[x.uri] });
+          };
+        }
+        items.push(it);
+      }
+    }
+    if (items.length) items.push({ label:'All Results', chevron:true, onSelect:() => runSearch(q) });
+    m.results = items.length ? items : [{ label:'No results', dim:true }];
+  } catch (e) {
+    if (req !== m.req) return;
+    m.results = [{ label:e.message, dim:true }];
+  }
+  m.loading = false;
+  if (m.mode === 'results' && m.index >= itemsOf(m).length) m.index = 0;
+  if (top() === m) render();
 }
 function runSearch(q){
   q = q.trim(); if (!q) return;
@@ -904,35 +998,48 @@ function render(){
   if (m.next && !m.loading && m.index >= items.length - 6) m.loadMore();
 }
 
-/* Search screen: a text box (opens the phone keyboard) above your recent searches */
-const SEARCH_ROWS = 7;
+/* Search screen: query box, live results, and the letter strip keyboard */
+const SEARCH_ROWS = 6, KEY_W = 21, STRIP_W = 282;
 function renderSearch(m){
   const body = $('#body');
   let view = body.querySelector('.searchview');
   if (!view) {
     body.innerHTML = `<div class="searchview">
-      <form class="sform" id="sform" action="#" autocomplete="off">
-        <svg viewBox="0 0 16 16"><circle cx="6.5" cy="6.5" r="4.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M10 10l4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-        <input id="sq" type="search" enterkeyhint="search" placeholder="Songs, artists, podcasts…" autocapitalize="off" autocorrect="off" spellcheck="false">
-      </form>
-      <div class="srows"></div></div>`;
+      <div class="sq"><svg viewBox="0 0 16 16"><circle cx="6.5" cy="6.5" r="4.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M10 10l4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg><span class="txt"></span></div>
+      <div class="srows"></div>
+      <div class="kstrip"><div class="track">${KEYS.map((k, i) =>
+        `<div class="k${i < 3 ? ' sp' : ''}" data-i="${i}">${k}</div>`).join('')}</div></div></div>`;
     view = body.querySelector('.searchview');
-    $('#sform').addEventListener('submit', e => { e.preventDefault(); const q = $('#sq').value; $('#sq').blur(); runSearch(q); });
-    $('#sq').addEventListener('focus', () => { m.index = -1; renderSearch(m); });
-    if (m.index < 0) $('#sq').focus({ preventScroll:true });   // opens the keyboard (same tap)
+    // Tapping a key on the strip types it straight away
+    view.querySelector('.kstrip').addEventListener('click', e => {
+      const k = e.target.closest('.k'); if (!k) return;
+      const cur = top(); if (!cur.search) return;
+      cur.cursor = Number(k.dataset.i); cur.mode = 'keys'; click();
+      typeKey(cur, KEYS[cur.cursor]);
+    });
   }
+  const keys = m.mode === 'keys';
+  view.querySelector('.sq .txt').innerHTML = (m.q ? esc(m.q) : '<span class="ph">Search</span>') + (keys ? '<span class="caret"></span>' : '');
+
   const items = itemsOf(m);
-  if (m.index >= items.length) m.index = items.length - 1;
-  if (m.index >= 0) {
+  if (!keys) {
+    if (m.index >= items.length) m.index = items.length - 1;
     if (m.index < m.topRow) m.topRow = m.index;
     if (m.index >= m.topRow + SEARCH_ROWS) m.topRow = m.index - SEARCH_ROWS + 1;
-  }
-  let rows = items.length ? '' : '<div class="row dim">Type, then press Search</div>';
+  } else m.topRow = Math.min(m.topRow, Math.max(0, items.length - SEARCH_ROWS));
+  let rows = '';
   items.slice(m.topRow, m.topRow + SEARCH_ROWS).forEach((it, i) => {
-    rows += `<div class="row${m.topRow + i === m.index ? ' sel' : ''}">${esc(it.label)}</div>`;
+    const sel = !keys && m.topRow + i === m.index;
+    rows += `<div class="row${sel ? ' sel' : ''}${it.dim ? ' dim' : ''}${it.tag ? ' hv' : ''}">${esc(it.label)}` +
+      (it.tag ? `<span class="tag">${esc(it.tag)}</span>` : it.chevron ? '<span class="chev">›</span>' : '') + '</div>';
   });
-  view.querySelector('.sform').classList.toggle('sel', m.index < 0);
+  if (m.loading && m.results) rows += '<div class="row dim">Searching…</div>';
   view.querySelector('.srows').innerHTML = rows;
+
+  const strip = view.querySelector('.kstrip');
+  strip.classList.toggle('off', !keys);
+  strip.querySelectorAll('.k').forEach((el, i) => el.classList.toggle('on', i === m.cursor));
+  strip.querySelector('.track').style.transform = `translateX(${STRIP_W / 2 - (m.cursor * KEY_W + KEY_W / 2)}px)`;
 }
 
 const spk = big => `<svg viewBox="0 0 12 12"><path d="M1 4h2l3-3v10L3 8H1z" fill="#333"/>${big ? '<path d="M8 3.5a4 4 0 010 5M9.5 2a6 6 0 010 8" stroke="#333" fill="none"/>' : ''}</svg>`;
@@ -1027,9 +1134,16 @@ function scroll(dir){
     click(); return;
   }
   const items = itemsOf(m);
-  if (m.search) {                       // -1 = the search box
-    const ni = Math.max(-1, Math.min(items.length - 1, m.index + dir));
-    if (ni !== m.index) { m.index = ni; if (ni >= 0) $('#sq') && $('#sq').blur(); click(); render(); }
+  if (m.search) {
+    if (m.mode === 'keys') {             // move along the letter strip
+      const nc = Math.max(0, Math.min(KEYS.length - 1, m.cursor + dir));
+      if (nc !== m.cursor) { m.cursor = nc; click(); render(); }
+    } else {                             // move through results; scrolling up past the first goes back to the keys
+      const first = items.findIndex(it => !it.dim);
+      if (dir < 0 && m.index <= first) { m.mode = 'keys'; click(); return render(); }
+      const ni = Math.max(0, Math.min(items.length - 1, m.index + dir));
+      if (ni !== m.index && !items[ni].dim) { m.index = ni; click(); render(); }
+    }
     return;
   }
   const ni = Math.max(0, Math.min(items.length - 1, m.index + dir));
@@ -1044,17 +1158,14 @@ function select(){
     else setMode(m, 'scrub');
     return;
   }
-  if (m.search && m.index < 0) {        // center on the search box: search, or open the keyboard
-    const q = $('#sq') ? $('#sq').value.trim() : '';
-    if (q) { $('#sq').blur(); runSearch(q); } else $('#sq') && $('#sq').focus();
-    return;
-  }
+  if (m.search && m.mode === 'keys') return typeKey(m, KEYS[m.cursor]);
   const it = itemsOf(m)[m.index];
   if (it && it.onSelect) it.onSelect();
 }
 function back(){
   activate();
-  if (document.activeElement && document.activeElement.id === 'sq') document.activeElement.blur();
+  const m = top();
+  if (m.search && m.mode === 'results') { m.mode = 'keys'; return render(); }   // MENU: results → keys
   if (stack.length > 1) { stack.pop(); render(); }
 }
 
@@ -1101,12 +1212,19 @@ $('#pod').addEventListener('wheel', e => {
 }, { passive:false });
 
 document.addEventListener('keydown', e => {
-  if (e.target.id === 'sq') {             // in the search box: Esc = back, ↓ = into recent searches
-    if (e.key === 'Escape') { back(); e.preventDefault(); }
-    else if (e.key === 'ArrowDown') { e.target.blur(); scroll(1); e.preventDefault(); }
-    return;
-  }
   if (e.target.tagName === 'INPUT') return;
+  const m = top();
+  if (m && m.search && !e.ctrlKey && !e.metaKey && !e.altKey) {   // a computer keyboard types straight in
+    if (e.key.length === 1 && /[\p{L}\p{N} '&.\-]/u.test(e.key)) {
+      m.mode = 'keys';
+      if (e.key === ' ') { if (m.q && !m.q.endsWith(' ')) m.q += ' '; queueLiveSearch(m); render(); }
+      else typeKey(m, e.key);
+      return e.preventDefault();
+    }
+    if (e.key === 'Backspace' && m.mode === 'keys' && m.q) { typeKey(m, KEY_DEL); return e.preventDefault(); }
+    if (e.key === 'Enter' && m.mode === 'keys' && m.q.trim()) { typeKey(m, KEY_RESULTS); return e.preventDefault(); }
+    if (m.mode === 'keys' && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { scroll(e.key === 'ArrowLeft' ? -1 : 1); return e.preventDefault(); }
+  }
   if (!$('#a2hs').classList.contains('hidden')) { if (e.key === 'Escape') closeA2hs(); return; }
   const k = e.key;
   if (k === 'ArrowDown') scroll(1);
