@@ -102,20 +102,20 @@
 
   /* Wheel */
   .wheel {
-    width:232px; height:232px; border-radius:50%; margin:58px auto 0; position:relative; touch-action:none; cursor:grab;
+    --wd:232px; width:var(--wd); height:var(--wd); border-radius:50%; margin:58px auto 0; flex:none; position:relative; touch-action:none; cursor:grab;
   }
   .silver .wheel { background: radial-gradient(circle at 50% 35%, #ffffff, #eceef0 60%, #dfe2e5); box-shadow: inset 0 1px 2px rgba(0,0,0,.18), 0 1px 0 rgba(255,255,255,.9); }
   .black .wheel { background: radial-gradient(circle at 50% 35%, #2e3034, #1a1b1e 60%, #111214); box-shadow: inset 0 1px 2px rgba(0,0,0,.8), 0 1px 0 rgba(255,255,255,.08); }
-  .wheel .lbl { position:absolute; font: 700 12px/1 "Helvetica Neue", Helvetica, Arial, sans-serif; letter-spacing:.5px; pointer-events:none; }
+  .wheel .lbl { position:absolute; font: 700 calc(var(--wd) * .052)/1 "Helvetica Neue", Helvetica, Arial, sans-serif; letter-spacing:.5px; pointer-events:none; }
   .silver .wheel .lbl { color:#b5b9be; fill:#b5b9be; }
   .black .wheel .lbl { color:#e6e6e6; fill:#e6e6e6; }
-  .lbl.menu { top:20px; left:50%; transform:translateX(-50%); }
-  .lbl.prev { left:20px; top:50%; transform:translateY(-50%); }
-  .lbl.next { right:20px; top:50%; transform:translateY(-50%); }
-  .lbl.pp { bottom:18px; left:50%; transform:translateX(-50%); }
-  .lbl svg { display:block; height:12px; }
+  .lbl.menu { top:calc(var(--wd) * .086); left:50%; transform:translateX(-50%); }
+  .lbl.prev { left:calc(var(--wd) * .086); top:50%; transform:translateY(-50%); }
+  .lbl.next { right:calc(var(--wd) * .086); top:50%; transform:translateY(-50%); }
+  .lbl.pp { bottom:calc(var(--wd) * .078); left:50%; transform:translateX(-50%); }
+  .lbl svg { display:block; height:calc(var(--wd) * .052); }
   .center {
-    position:absolute; width:86px; height:86px; left:50%; top:50%; transform:translate(-50%,-50%); border-radius:50%; cursor:pointer;
+    position:absolute; width:37%; height:37%; left:50%; top:50%; transform:translate(-50%,-50%); border-radius:50%; cursor:pointer;
   }
   .silver .center { background:linear-gradient(#f2f3f5,#d3d6da); box-shadow: 0 1px 2px rgba(0,0,0,.3), inset 0 1px 0 #fff; }
   .black .center { background:linear-gradient(#3b3d42,#1d1e21); box-shadow: 0 1px 2px rgba(0,0,0,.8), inset 0 1px 0 rgba(255,255,255,.12); }
@@ -150,13 +150,32 @@
     .podwrap { overflow:hidden; border-radius:30px; }
     body.connected { min-height:100vh; min-height:100dvh; align-content:center; }
   }
+
+  /* ---------- Full screen (phones, foldables, home-screen app) ----------
+     Closed / portrait: screen on top, wheel below.
+     Open / wide: screen and wheel side by side, one per half (so a centre hinge falls between them). */
+  .bezel { width:292px; transform-origin: top left; }
+  .bezelwrap { flex:none; }
+  body.fs { position:fixed; inset:0; padding:0; overflow:hidden; display:block; }
+  body.fs .panel { display:none; }
+  body.fs .podwrap { position:fixed; inset:0; width:auto !important; height:auto !important; overflow:hidden; border-radius:0; }
+  body.fs .pod {
+    position:absolute; inset:0; width:auto; height:auto; border-radius:0; transform:none !important;
+    padding: calc(env(safe-area-inset-top) + var(--pad, 16px)) calc(env(safe-area-inset-right) + var(--pad, 16px))
+             calc(env(safe-area-inset-bottom) + var(--pad, 16px)) calc(env(safe-area-inset-left) + var(--pad, 16px));
+    display:grid; grid-template-rows:auto 1fr; grid-template-columns:100%; justify-items:center; align-items:center;
+    box-shadow:none;
+  }
+  body.fs.wide .pod { grid-template-rows:100%; grid-template-columns:1fr 1fr; }
+  body.fs .wheel { margin:0; }
+  body.fs:not(.wide) .bezelwrap { align-self:start; }
 </style>
 </head>
 <body>
 
 <div class="podwrap" id="podwrap">
 <div class="pod silver" id="pod">
-  <div class="bezel">
+  <div class="bezelwrap" id="bezelwrap"><div class="bezel" id="bezel">
     <div class="screen" id="screen">
       <div class="hdr">
         <svg class="st" id="stIcon" viewBox="0 0 12 11"></svg>
@@ -166,7 +185,7 @@
       <div class="body" id="body"></div>
       <div class="toast" id="toast"></div>
     </div>
-  </div>
+  </div></div>
   <div class="wheel" id="wheel">
     <span class="lbl menu">MENU</span>
     <span class="lbl prev"><svg viewBox="0 0 22 12"><path d="M2 0h2v12H2zM12 0v12L4 6zM21 0v12l-8-6z"/></svg></span>
@@ -881,16 +900,55 @@ document.addEventListener('keydown', e => {
 });
 
 /* ================= Setup panel ================= */
-/* Scale the device to fit small screens (phones) */
-function fitPod(){
-  const W = 340, H = 566, pod = $('#pod'), wrap = $('#podwrap');
-  const small = innerWidth <= 760;
-  const s = small ? Math.min(1.25, (innerWidth - 32) / W, (innerHeight - 40) / H) : 1;
-  pod.style.transform = s === 1 ? '' : `scale(${s})`;
-  wrap.style.width = W * s + 'px'; wrap.style.height = H * s + 'px';
+/* ================= Layout =================
+   Desktop: the classic device on a backdrop, next to the setup panel.
+   Phones / foldables / home-screen app: the device fills the whole screen. */
+const FORCE_FS = new URLSearchParams(location.search).has('fs');
+const BEZEL_W = 292, BEZEL_H = 222;
+function wantsFullscreen(){
+  if (!auth.loggedIn) return false;
+  return FORCE_FS || navigator.standalone === true || matchMedia('(display-mode: standalone)').matches
+    || matchMedia('(pointer: coarse)').matches;
 }
-addEventListener('resize', fitPod);
-fitPod();
+function layout(){
+  const pod = $('#pod'), wrap = $('#podwrap'), bw = $('#bezelwrap'), bezel = $('#bezel'), wheel = $('#wheel');
+  const fs = wantsFullscreen();
+  document.body.classList.toggle('fs', fs);
+  if (!fs) {
+    document.body.classList.remove('wide');
+    bezel.style.transform = ''; bw.style.width = bw.style.height = ''; wheel.style.removeProperty('--wd');
+    const s = innerWidth <= 760 ? Math.min(1.25, (innerWidth - 32) / 340, (innerHeight - 40) / 566) : 1;
+    pod.style.transform = s === 1 ? '' : `scale(${s})`;
+    wrap.style.width = 340 * s + 'px'; wrap.style.height = 566 * s + 'px';
+    return;
+  }
+  const vw = innerWidth, vh = innerHeight;
+  const pad = Math.round(Math.max(12, Math.min(28, Math.min(vw, vh) * 0.04)));
+  pod.style.setProperty('--pad', pad + 'px');
+  const cs = getComputedStyle(pod);
+  const W = vw - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  const H = vh - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
+  const ratio = W / H;
+  const wide = ratio > 1.15;              // landscape: side by side
+  const open = ratio > 0.7;               // unfolded (near-square): stacked, bigger screen
+  document.body.classList.toggle('wide', wide);
+  let s, wd;
+  if (wide) {
+    const col = (W - pad) / 2;
+    s = Math.min(col / BEZEL_W, (H * 0.92) / BEZEL_H);
+    wd = Math.min(col * 0.86, H * 0.86);
+  } else {
+    s = Math.min(W / BEZEL_W, (H * (open ? 0.6 : 0.5)) / BEZEL_H);
+    wd = Math.min(W * 0.84, (H - BEZEL_H * s - pad) * 0.86);
+  }
+  bezel.style.transform = `scale(${s})`;
+  bw.style.width = BEZEL_W * s + 'px'; bw.style.height = BEZEL_H * s + 'px';
+  wheel.style.setProperty('--wd', Math.max(140, wd) + 'px');
+}
+addEventListener('resize', layout);
+addEventListener('orientationchange', () => setTimeout(layout, 250));
+if (window.visualViewport) visualViewport.addEventListener('resize', layout);
+layout();
 
 function syncPanel(){
   document.body.classList.toggle('connected', auth.loggedIn);
@@ -898,6 +956,7 @@ function syncPanel(){
   $('#connect').classList.toggle('hidden', auth.loggedIn);
   $('#logout').classList.toggle('hidden', !auth.loggedIn);
   $('#panel h1').textContent = auth.loggedIn ? 'Connected' : 'Connect Spotify';
+  layout();
 }
 $('#redir').textContent = REDIRECT;
 $('#copyRedir').addEventListener('click', () => { navigator.clipboard && navigator.clipboard.writeText(REDIRECT); toast('Redirect URI copied'); });
