@@ -241,6 +241,20 @@
   }
   body.fs.wide .pod { grid-template-rows:100%; grid-template-columns:1fr 1fr; }
   body.fs .wheel { margin:0; }
+  /* Full screen: iOS can leave a strip below the page (around the home bar) that the page can't
+     reach. So the faceplate fades top-to-bottom into --f4, the same flat colour painted behind
+     the page, and the diagonal sheen fades out before the bottom. Result: no visible seam. */
+  body.fs .pod {
+    background:
+      linear-gradient(140deg, rgba(255,255,255,.10) 0%, rgba(255,255,255,0) 45%),
+      linear-gradient(180deg, var(--f1) 0%, var(--f3) 35%, var(--f2) 70%, var(--f4) 100%);
+  }
+  body.fs .pod.metal {
+    background:
+      repeating-linear-gradient(90deg, rgba(255,255,255,.018) 0 1px, rgba(0,0,0,.018) 1px 2px, transparent 2px 4px),
+      linear-gradient(140deg, rgba(255,255,255,.10) 0%, rgba(255,255,255,0) 45%),
+      linear-gradient(180deg, var(--f1) 0%, var(--f3) 35%, var(--f2) 70%, var(--f4) 100%);
+  }
   body.fs:not(.wide) .bezelwrap { align-self:start; }
 
   /* ---------- Add to Home Screen ---------- */
@@ -1224,8 +1238,12 @@ function toast(msg){
 /* ================= Version & updates =================
    Bump APP_VERSION here AND in version.json for every release. The Home Screen app checks
    version.json (never cached) on launch; if it's newer than this copy, it reloads the new one. */
-const APP_VERSION = '0.0.4';
+const APP_VERSION = '0.0.5';
 const CHANGELOG = [
+  { v:'0.0.5', notes:[
+    'Faceplate blends into screen edge',
+    'No color seam near the home bar',
+  ]},
   { v:'0.0.4', notes:[
     'Fixed white bar after rotating',
     'Re-fits after unfolding or turning',
@@ -1300,7 +1318,7 @@ function applyFace(id = settings.face){
    colour, so any gap while the phone rotates or unfolds blends in instead of showing a bar. */
 function paintEdge(){
   const fs = document.body.classList.contains('fs');
-  const edge = fs ? getComputedStyle($('#pod')).getPropertyValue('--f2').trim() : '';
+  const edge = fs ? getComputedStyle($('#pod')).getPropertyValue('--f4').trim() : '';
   document.documentElement.style.backgroundColor = edge;
   document.body.style.backgroundColor = edge;
   const meta = document.querySelector('meta[name="theme-color"]');
