@@ -258,6 +258,15 @@
     font:15px/1.45 -apple-system, "Segoe UI", sans-serif; box-shadow:0 20px 50px rgba(0,0,0,.6); }
   .a2hs-card h2 { margin:0 0 4px; font-size:19px; }
   .a2hs-card p { margin:0 0 14px; color:#a8adb3; font-size:14px; }
+  .a2hs.top { align-items:flex-start; padding-top:calc(env(safe-area-inset-top) + 16px); }
+  .a2hs-arrow { position:fixed; z-index:31; width:44px; height:44px; display:none; pointer-events:none;
+    background:no-repeat center/contain url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 4v15M6 13l6 6 6-6'/%3E%3C/svg%3E");
+    filter: drop-shadow(0 2px 6px rgba(0,0,0,.6)); }
+  .a2hs-arrow.down { display:block; left:50%; bottom:calc(env(safe-area-inset-bottom) + 6px); animation: nudge-down 1s ease-in-out infinite; }
+  .a2hs-arrow.up-right { display:block; right:14px; top:calc(env(safe-area-inset-top) + 4px); animation: nudge-up 1s ease-in-out infinite; }
+  @keyframes nudge-down { 0%,100% { transform:translate(-50%,0) } 50% { transform:translate(-50%,8px) } }
+  @keyframes nudge-up { 0%,100% { transform:rotate(180deg) translateY(0) } 50% { transform:rotate(180deg) translateY(8px) } }
+  .a2hs-card .warn { background:rgba(255,180,60,.12); color:#ffcf7a; border-radius:10px; padding:8px 10px; font-size:13px; margin:-4px 0 12px; }
   .a2hs-card ol { margin:0 0 16px; padding-left:0; list-style:none; counter-reset:s; }
   .a2hs-card li { counter-increment:s; display:flex; gap:12px; align-items:center; padding:9px 0; border-top:1px solid rgba(255,255,255,.08); }
   .a2hs-card li::before { content:counter(s); flex:none; width:26px; height:26px; border-radius:50%; background:#2f6fe0; color:#fff;
@@ -300,15 +309,12 @@
 <div class="a2hs hidden" id="a2hs" role="dialog" aria-modal="true" aria-labelledby="a2hsTitle">
   <div class="a2hs-card">
     <h2 id="a2hsTitle">Put Web Pod on your Home Screen</h2>
-    <p>It then opens full screen, with no Safari bars.</p>
-    <ol>
-      <li><span>Tap <b>Share</b> <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 8l5-5 5 5"/><path d="M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7"/></svg> below, or in Safari’s toolbar (it may be under <b>•••</b>)</span></li>
-      <li><span>Scroll down and tap <b>Add to Home Screen</b></span></li>
-      <li><span>Make sure <b>Open as Web App</b> is on, then tap <b>Add</b></span></li>
-    </ol>
-    <button class="primary" id="a2hsShare">Share</button>
-    <button class="secondary" id="a2hsClose">Close</button>
+    <p id="a2hsLead">It then opens full screen, with no browser bars.</p>
+    <ol id="a2hsSteps"></ol>
+    <button class="primary" id="a2hsPrimary">Got it</button>
+    <button class="secondary" id="a2hsSecondary">Copy Link</button>
   </div>
+  <div class="a2hs-arrow" id="a2hsArrow" aria-hidden="true"></div>
 </div>
 
 <div class="panel" id="panel">
@@ -1218,8 +1224,14 @@ function toast(msg){
 /* ================= Version & updates =================
    Bump APP_VERSION here AND in version.json for every release. The Home Screen app checks
    version.json (never cached) on launch; if it's newer than this copy, it reloads the new one. */
-const APP_VERSION = '0.0.2';
+const APP_VERSION = '0.0.3';
 const CHANGELOG = [
+  { v:'0.0.3', notes:[
+    'Fixed Add to Home Screen guide',
+    'Steps for Safari, Chrome & in-app',
+    'Arrow points to the right button',
+    'Copy Link to open in Safari',
+  ]},
   { v:'0.0.2', notes:[
     'Version moved into About',
     'About shows who made Web Pod',
@@ -1479,25 +1491,69 @@ document.addEventListener('keydown', e => {
 const FORCE_FS = new URLSearchParams(location.search).has('fs');
 
 /* ---- Add to Home Screen ----
-   Websites can't add themselves to the Home Screen on iOS, so this opens a short guide
-   plus the share sheet, where "Add to Home Screen" lives. */
+   A website can't add itself to the Home Screen, and the share sheet a page can open doesn't
+   include "Add to Home Screen" — only the browser's own toolbar menu does. So this shows
+   steps for the browser you're actually in, with an arrow pointing at the right button. */
 const isStandalone = () => navigator.standalone === true || matchMedia('(display-mode: standalone)').matches;
 const isTouch = () => matchMedia('(pointer: coarse)').matches;
 const canInstall = () => !isStandalone() && (isTouch() || FORCE_FS);
-function openA2hs(){ $('#a2hs').classList.remove('hidden'); $('#a2hsShare').focus(); }
-function closeA2hs(){ $('#a2hs').classList.add('hidden'); }
-function syncA2hs(){ $('#a2hsBtn').classList.toggle('hidden', !canInstall()); }
-$('#a2hsBtn').addEventListener('click', openA2hs);
-$('#a2hsClose').addEventListener('click', closeA2hs);
-$('#a2hs').addEventListener('click', e => { if (e.target.id === 'a2hs') closeA2hs(); });
-$('#a2hsShare').addEventListener('click', async () => {
-  if (navigator.share) {
-    try { await navigator.share({ title:'Web Pod', url: REDIRECT }); } catch {}
+const SHARE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 8l5-5 5 5"/><path d="M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7"/></svg>';
+function detectBrowser(){
+  const ua = navigator.userAgent;
+  const ios = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  const tablet = /iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  if (/FBAN|FBAV|Instagram|Snapchat|musical_ly|TikTok|Line\/|GSA\/|LinkedInApp|Twitter/i.test(ua)) return { kind:'inapp', ios };
+  if (/CriOS/.test(ua)) return { kind:'chrome', ios };
+  if (/FxiOS|EdgiOS|OPiOS/.test(ua)) return { kind:'otherios', ios };
+  if (ios) return { kind:'safari', ios, tablet };
+  return { kind:'other', ios };
+}
+function openA2hs(){
+  const b = detectBrowser();
+  const addStep = '<li><span>Tap <b>Add to Home Screen</b> (scroll down, or tap <b>More</b> if you don’t see it)</span></li>';
+  const webAppStep = '<li><span>Make sure <b>Open as Web App</b> is on, then tap <b>Add</b></span></li>';
+  let lead = 'It then opens full screen, with no browser bars.', steps = '', arrow = '', top = false, primary = 'Got it', secondary = 'Copy Link';
+  if (b.kind === 'safari') {
+    steps = (b.tablet
+      ? `<li><span>Tap <b>Share</b> ${SHARE_ICON} at the top right of Safari</span></li>`
+      : `<li><span>Tap <b>•••</b> or <b>Share</b> ${SHARE_ICON} in Safari’s bar at the bottom of the screen (if you tapped •••, tap <b>Share</b> next)</span></li>`)
+      + addStep + webAppStep;
+    lead = 'Use <b>Safari’s own</b> Share button, not one inside Web Pod. It then opens full screen with no Safari bars.';
+    arrow = b.tablet ? 'up-right' : 'down'; top = !b.tablet;
+  } else if (b.kind === 'chrome') {
+    steps = `<li><span>Tap <b>Share</b> ${SHARE_ICON} at the right end of Chrome’s address bar</span></li>` + addStep + webAppStep;
+    arrow = 'up-right';
+  } else if (b.kind === 'inapp') {
+    lead = '<span class="warn">This page is open inside another app, which can’t add it to the Home Screen. Open it in Safari first.</span>';
+    steps = '<li><span>Tap <b>Copy Link</b> below</span></li><li><span>Open <b>Safari</b>, paste the link and go</span></li><li><span>Tap <b>Add to Home Screen</b> there (Web Pod will show you how)</span></li>';
+    primary = 'Copy Link'; secondary = 'Close';
+  } else if (b.kind === 'otherios') {
+    steps = '<li><span>Open this browser’s menu and tap <b>Share</b></span></li>' + addStep
+      + '<li><span>Don’t see it? Tap <b>Copy Link</b>, open it in <b>Safari</b>, and add it from there</span></li>';
   } else {
-    try { await navigator.clipboard.writeText(REDIRECT); } catch {}
-    toast('Use the Share button in Safari’s toolbar');
+    lead = 'On an iPhone, open Web Pod in <b>Safari</b> to add it to your Home Screen.';
+    steps = `<li><span>Open <b>${esc(REDIRECT)}</b> in Safari on your phone</span></li><li><span>Tap Share ${SHARE_ICON}, then <b>Add to Home Screen</b></span></li>`;
   }
-});
+  $('#a2hsLead').innerHTML = lead;
+  $('#a2hsSteps').innerHTML = steps;
+  $('#a2hsPrimary').textContent = primary;
+  $('#a2hsSecondary').textContent = secondary;
+  $('#a2hsArrow').className = 'a2hs-arrow' + (arrow ? ' ' + arrow : '');
+  $('#a2hs').classList.toggle('top', top);
+  $('#a2hs').classList.remove('hidden');
+  $('#a2hsPrimary').focus();
+}
+function closeA2hs(){ $('#a2hs').classList.add('hidden'); $('#a2hsArrow').className = 'a2hs-arrow'; }
+function syncA2hs(){ $('#a2hsBtn').classList.toggle('hidden', !canInstall()); }
+async function copyLink(){
+  let ok = false;
+  try { await navigator.clipboard.writeText(REDIRECT); ok = true; } catch {}
+  toast(ok ? 'Link copied. Paste it into Safari.' : REDIRECT);
+}
+$('#a2hsBtn').addEventListener('click', openA2hs);
+$('#a2hs').addEventListener('click', e => { if (e.target.id === 'a2hs') closeA2hs(); });
+$('#a2hsPrimary').addEventListener('click', () => { if ($('#a2hsPrimary').textContent === 'Copy Link') copyLink(); else closeA2hs(); });
+$('#a2hsSecondary').addEventListener('click', () => { if ($('#a2hsSecondary').textContent === 'Copy Link') copyLink(); else closeA2hs(); });
 matchMedia('(display-mode: standalone)').addEventListener?.('change', () => { syncA2hs(); render(); });
 syncA2hs();
 const BEZEL_W = 292, BEZEL_H = 222;
